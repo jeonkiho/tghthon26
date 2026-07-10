@@ -1,0 +1,135 @@
+"""설정 로딩.
+
+config.yaml 이 없어도 기본값으로 동작한다. 설정 파일이 코드보다 우선한다.
+비밀(Slack webhook)은 환경변수를 먼저 본다.
+"""
+
+import copy
+import os
+import pathlib
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+DEFAULT_PATH = ROOT / 'config.yaml'
+
+DEFAULTS = {
+    'connection': {
+        'mode': 'mock',
+        'host': 'ariel',
+        'poll_interval_seconds': 7,
+        'login_node_load_limit': 8.0,
+    },
+    'cluster': {
+        'default_partition': 'batch_grad',
+    },
+    'lint': {
+        'blocked_paths': ['/nas2/'],
+        'warn_paths': ['/ceph_data/', '/home/'],
+    },
+    'sbatch': {
+        'default_cpus_per_task': 8,
+        'default_mem': '32G',
+        'default_time': '24:00:00',
+        'output_pattern': 'slurm-%j.out',
+    },
+    'slack': {
+        'channel': '공지',      # 읽어올 채널 이름 또는 ID
+        'limit': 10,           # 가져올 최근 메시지 수
+    },
+    'notify': {
+        'slack_webhook_url': None,
+    },
+}
+
+
+def _merge(base, override):
+    """override 의 값이 이긴다. 없는 키는 base 를 쓴다."""
+    out = copy.deepcopy(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+class Config:
+    def __init__(self, data):
+        self._data = data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    @property
+    def mode(self):
+        return self._data['connection']['mode']
+
+    @property
+    def host(self):
+        return self._data['connection']['host']
+
+    @property
+    def poll_interval(self):
+        return self._data['connection']['poll_interval_seconds']
+
+    @property
+    def load_limit(self):
+        return float(self._data['connection']['login_node_load_limit'])
+
+    @property
+    def default_partition(self):
+        return self._data['cluster']['default_partition']
+
+    @property
+    def blocked_paths(self):
+        return list(self._data['lint']['blocked_paths'])
+
+    @property
+    def warn_paths(self):
+        return list(self._data['lint']['warn_paths'])
+
+    @property
+    def sbatch(self):
+        return self._data['sbatch']
+
+    @property
+    def slack_webhook(self):
+        """환경변수가 파일보다 우선한다. 비밀을 커밋하지 않기 위해서."""
+        return (os.environ.get('SERAPH_SLACK_WEBHOOK')
+                or self._data['notify']['slack_webhook_url'])
+
+    @property
+    def slack_token(self):
+        """공지를 읽을 때 쓰는 Slack Web API 토큰.
+
+        오직 환경변수에서만 읽는다. config.yaml 에 적을 자리를 주지 않는다 —
+        그 파일은 커밋되기 때문이다. 없으면 None (mock 으로 동작).
+        """
+        return os.environ.get('SERAPH_SLACK_TOKEN') or None
+
+    @property
+    def slack_channel(self):
+        return self._data['slack']['channel']
+
+    @property
+    def slack_limit(self):
+        return int(self._data['slack']['limit'])
+
+    def to_dict(self):
+        return copy.deepcopy(self._data)
+
+
+def load(path=DEFAULT_PATH):
+    """config.yaml 을 읽는다. 없거나 PyYAML 이 없으면 기본값으로 동작한다."""
+    path = pathlib.Path(path)
+    if not path.exists():
+        return Config(copy.deepcopy(DEFAULTS))
+
+    try:
+        import yaml
+    except ImportError:
+        # PyYAML 이 없어도 mock 개발은 계속할 수 있어야 한다.
+        return Config(copy.deepcopy(DEFAULTS))
+
+    with open(path, encoding='utf-8') as f:
+        data = yaml.safe_load(f) or {}
+    return Config(_merge(DEFAULTS, data))

@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "has_more": false,
+  "messages": [
+    {
+      "type": "message",
+      "user": "U01ADMIN",
+      "text": "*[긴급] ariel-m1 노드 점검*\n\nGPU 1개 고장으로 <#C02SERAPH|seraph-공지> 채널에 공지합니다.\n오늘 18시부터 drain 상태로 전환합니다. 자세한 내용은 <https://wiki.khu.ac.kr/seraph/maintenance|위키 문서>를 참고하세요.\n문의: <@U02TA>",
+      "ts": "1752120000.000100",
+      "reactions": [
+        {"name": "eyes", "count": 7, "users": []},
+        {"name": "+1", "count": 3, "users": []}
+      ],
+      "reply_count": 2
+    },
+    {
+      "type": "message",
+      "user": "U02TA",
+      "text": "학습 데이터는 &lt;NAS&gt; 에서 직접 읽지 마세요. 노드 로컬로 복사 후 사용 &amp; 종료 시 정리 부탁드립니다.",
+      "ts": "1752033600.000200"
+    },
+    {
+      "type": "message",
+      "subtype": "channel_join",
+      "user": "U09NEW",
+      "text": "<@U09NEW> has joined the channel",
+      "ts": "1751947200.000300"
+    },
+    {
+      "type": "message",
+      "user": "U01ADMIN",
+      "text": "이번 주 QOS 한도가 조정되었습니다. 대학원생 기본 한도는 GPU 4개입니다.",
+      "ts": "1751860800.000400",
+      "reply_count": 0
+    },
+    {
+      "type": "message",
+      "bot_id": "B01BOT",
+      "username": "Slurm Bot",
+      "text": "자동 알림: batch_grad 파티션 사용률 90% 초과",
+      "ts": "1751774400.000500"
+    },
+    {
+      "type": "message",
+      "user": "U02TA",
+      "text": "VSCode Remote-SSH 로 로그인 노드에 붙지 마세요. load 가 치솟습니다.\n대안은 <https://code.visualstudio.com/docs/remote/tunnels> 참고.",
+      "ts": "1751688000.000600",
+      "reactions": [{"name": "warning", "count": 12, "users": []}]
+    }
+  ]
+}
