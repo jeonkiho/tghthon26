@@ -81,6 +81,68 @@ ariel 안에서도 **대학원생은 `*_grad`, 학부생은 `*_ugrad`** 파티�
 
 ---
 
+## ⭐ `placement.find_fastest(conn, snap, gpus=1, hours=2.0, high_perf=False)`
+
+**이 도구의 핵심 기능.** "지금 바로 학습을 시작할 수 있나? 안 되면 어디에 올려야
+제일 빨리 시작하나?"에 답한다.
+
+```python
+from seraph import placement
+r = placement.find_fastest(conn, snap, gpus=1, hours=2)
+```
+
+```json
+{
+  "can_start_now": true,
+  "headline": "지금 바로 시작할 수 있습니다 → debug_grad / ariel-v4 (최대 4시간 제한)",
+  "best": {
+    "partition": "debug_grad", "node": "ariel-v4",
+    "start": "2026-07-13T17:18:26",
+    "wait_seconds": 0, "wait_text": "지금 바로", "starts_now": true,
+    "time_limit_seconds": 14400,
+    "script": "#!/bin/bash\n#SBATCH --partition=debug_grad\n..."
+  },
+  "options": [ {...best...}, {"partition": "batch_grad", "wait_text": "약 3시간 9분 뒤", ...} ],
+  "blocked": [ {"partition": "...", "reason": "..."} ],
+  "requested": {"gpus": 1, "hours": 2, "high_perf": false}
+}
+```
+
+- `headline` 은 완성된 한 문장이다. **화면에 그대로 크게 띄우면 된다.**
+- `can_start_now` 로 색을 정한다 (초록=지금 가능, 노랑=기다려야 함).
+- `options` 는 **빠른 순 정렬**. 각 항목에 `wait_text`(사람이 읽는 대기시간)와
+  `time_limit_seconds`(그 파티션 시간 제한)가 있다.
+- `best.script` 는 **바로 제출할 수 있는 sbatch 스크립트**다. 사용자가 확인 후
+  제출하면 된다.
+- `blocked` 는 아예 못 내는 후보와 이유 (계정 불일치, QOS 한도 등).
+
+### ⚠️ 왜 이게 필요한가 — `free_gpus` 로는 알 수 없다
+
+실서버에서 실제로 관측한 상황:
+
+```
+ariel-v6 : GPU 8개 중 7개 여유, CPU 52개 여유       ← 다 비어 보인다
+그런데 batch_grad 에 내면 → "3시간 10분 뒤에나 시작"  ← 못 쓴다!
+같은 시각 debug_grad 에 내면 → "지금 즉시 시작"       ← 여긴 된다
+```
+
+우선순위 높은 대기 job 이 그 자원을 잡아두고 있어서다. **여유 GPU 를 세어서
+"지금 가능"이라고 말하면 틀린다.** 그래서 이 함수는 `sbatch --test-only` 로
+Slurm 에게 직접 물어본다(우선순위·backfill·QOS 를 다 계산한 답). **job 은 제출되지
+않는다.**
+
+### 호출 규칙
+
+`snapshot()` 폴링(5~10초)에 **넣지 말 것.** Slurm 에 후보 수만큼(보통 2~6회)
+질의하므로, 사용자가 "지금 되나?" 를 눌렀을 때나 화면 진입 시에만 부른다.
+(실측: 5회 질의에 1초 미만이라 가볍긴 하다.)
+
+`hours` 를 바꾸면 결과가 달라진다 — `debug_*` 는 4시간 제한이라 12시간 학습은
+후보에서 자동으로 빠진다. 프론트는 사용자에게 GPU 수와 학습 시간을 물어보고
+넘기면 된다.
+
+---
+
 ## `whoami(snap)` — 접속한 사용자가 누구인가
 
 화면 상단과 "여기 아님" 안내에 쓴다.

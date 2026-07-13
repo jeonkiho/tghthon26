@@ -14,6 +14,7 @@ ControlMaster 는 OpenSSH 클라이언트 기능이라 paramiko 연결에는 적
 import getpass
 import pathlib
 import sys
+from datetime import datetime, timedelta
 
 from . import commands
 from . import config as config_module
@@ -51,6 +52,29 @@ class MockConnection:
     def sacct(self, days=7, user=None):
         """끝난 job 기록. mock 은 저장된 출력을 그대로 준다(days 는 무시)."""
         return self.run('sacct')
+
+    def test_submit(self, script):
+        """mock 예측. 실제 Slurm 없이 프론트가 개발할 수 있게 흉내만 낸다.
+
+        실서버에서 관측한 패턴을 재현한다: debug_* 는 즉시, batch_* 는 몇 시간 뒤.
+        시각은 **현재 기준 상대**로 만든다. 고정 시각을 박으면 그 날짜가 지난 뒤
+        과거가 되어 말이 안 된다.
+        """
+        partition = 'batch_grad'
+        node = 'ariel-v6'
+        for line in script.splitlines():
+            line = line.strip()
+            if '--partition=' in line:
+                partition = line.split('--partition=', 1)[1].strip()
+            elif line.startswith('#SBATCH -p '):
+                partition = line.split('-p ', 1)[1].strip()
+            elif '--nodelist=' in line:
+                node = line.split('--nodelist=', 1)[1].strip()
+
+        delay = timedelta(0) if partition.startswith('debug') else timedelta(hours=3, minutes=10)
+        when = (datetime.now() + delay).replace(microsecond=0).isoformat()
+        return (f'sbatch: Job 999999 to start at {when} using 2 processors '
+                f'on nodes {node} in partition {partition}\n')
 
     def close(self):
         pass
@@ -214,6 +238,40 @@ class SSHConnection:
     def sacct(self, days=7, user=None):
         """끝난 job 기록. 폴링에 넣지 말 것 — 느리고 자주 바뀌지 않는다."""
         return self.run_command(commands.sacct(days, user), label='sacct', timeout=60)
+
+    def test_submit(self, script):
+        """`sbatch --test-only` — **제출하지 않고** Slurm 에게 물어본다:
+        "이 job 을 내면 언제 시작하냐?"
+
+        Slurm 의 스케줄러가 우선순위·backfill·QOS 를 전부 고려해 답한다. sinfo 의
+        여유 GPU 를 세는 것보다 정확하다 (여유 GPU 가 있어도 우선순위 높은 대기 job
+        때문에 못 쓸 수 있다).
+
+        job 을 만들지 않으므로 안전하다. 반환은 stdout+stderr 원문.
+        """
+        # 스크립트를 heredoc 으로 넘긴다. paramiko 의 stdin 채널로 쓰는 건
+        # 연결이 닫히는 타이밍 문제가 있어 불안정하다.
+        # 'EOF' 를 따옴표로 감싸 셸이 스크립트 내용을 건드리지 않게 한다.
+        marker = 'SERAPH_EOF'
+        if marker in script:
+            raise ValueError('스크립트에 예약어가 들어 있습니다.')
+        command = (
+            f'f=$(mktemp /tmp/seraph-test.XXXXXX) && '
+            f"cat > \"$f\" <<'{marker}'\n{script}\n{marker}\n"
+            f'sbatch --test-only "$f" 2>&1; rm -f "$f"'
+        )
+        return self._run_raw(command, timeout=30)
+
+    def _run_raw(self, command, timeout=30):
+        """rc 를 따지지 않고 stdout+stderr 를 그대로 돌려준다.
+
+        --test-only 는 거절될 때 rc!=0 이면서 stderr 에 이유를 쓴다. 그 이유가
+        우리한테 필요한 정보라 예외로 던지면 안 된다.
+        """
+        _, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+        out = stdout.read().decode()
+        err = stderr.read().decode()
+        return out + err
 
     def close(self):
         self.client.close()

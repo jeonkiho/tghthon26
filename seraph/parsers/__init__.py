@@ -4,6 +4,7 @@ from .qos import QosLimit, parse_qos, parse_assoc, parse_uptime, parse_accounts
 from .gres import parse_gres, parse_tres, gpus_from_tres, total_gpus, HIGH_PERF
 from .partition import Partition, parse_partitions, parse_slurm_duration
 from .sacct import FinishedJob, parse_sacct, parse_memory_mb, SUCCESS
+from .testonly import (Prediction, parse_test_only, seconds_until, starts_within)
 
 __all__ = [
     'Job', 'parse_squeue', 'parse_squeue_start', 'RUNNING', 'PENDING',
@@ -12,4 +13,5 @@ __all__ = [
     'parse_gres', 'parse_tres', 'gpus_from_tres', 'total_gpus', 'HIGH_PERF',
     'Partition', 'parse_partitions', 'parse_slurm_duration',
     'FinishedJob', 'parse_sacct', 'parse_memory_mb', 'SUCCESS',
+    'Prediction', 'parse_test_only', 'seconds_until', 'starts_within',
 ]

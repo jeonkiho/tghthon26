@@ -12,15 +12,16 @@ import sys
 
 from . import config as config_module
 from . import services, sbatch as sbatch_module, tutorial as tutorial_module
-from . import history, notify, slack
+from . import history, notify, placement, slack
 
 
 SECTIONS = ('status', 'diagnose', 'nodes', 'usage', 'lint', 'wait',
             'sbatch', 'tutorial', 'announcements', 'history', 'result',
-            'notify', 'config', 'partitions', 'whoami', 'clusters')
+            'notify', 'config', 'partitions', 'whoami', 'clusters',
+            'fastest')
 
 # sacct 는 스냅샷과 달리 요청할 때만 부른다. 그래서 conn 이 필요하다.
-_NEEDS_CONNECTION = ('history', 'result')
+_NEEDS_CONNECTION = ('history', 'result', 'fastest')
 
 
 def build(snapshot, args, conn=None):
@@ -68,6 +69,10 @@ def build(snapshot, args, conn=None):
             raise SystemExit('--job-id 가 필요합니다.')
         return history.get_job_result(conn.sacct(args.days, args.user),
                                       args.job_id)
+    if args.section == 'fastest':
+        return placement.find_fastest(conn, snapshot, gpus=args.gpus,
+                                      hours=args.hours,
+                                      high_perf=args.high_perf)
     if args.section == 'announcements':
         # SERAPH_SLACK_TOKEN 이 있으면 실제 Slack, 없으면 저장된 mock 공지.
         cfg = snapshot.config
@@ -92,6 +97,9 @@ def main(argv=None):
     ap.add_argument('--user', help='생략하면 접속한 본인')
     ap.add_argument('--days', type=int, default=7, help='history: 조회 기간')
     ap.add_argument('--limit', type=int, default=20, help='history: 표시 개수')
+    ap.add_argument('--gpus', type=int, default=1, help='fastest: 필요한 GPU 수')
+    ap.add_argument('--hours', type=float, default=2.0, help='fastest: 학습 시간')
+    ap.add_argument('--high-perf', action='store_true', help='fastest: 고성능 GPU')
     args = ap.parse_args(argv)
 
     cfg = config_module.load()

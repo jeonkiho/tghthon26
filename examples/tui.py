@@ -21,14 +21,16 @@ import unicodedata
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from seraph import services
+from seraph import placement, services
 from seraph.connection import connect, SSHConnection
 
 
-def fetch(conn):
+def fetch(conn, gpus=1, hours=2.0):
     """백엔드에서 화면에 필요한 것을 모아 온다. 실패해도 죽지 않는다."""
     try:
         snap = conn.snapshot()
+        # "지금 바로 되나? 안 되면 어디가 제일 빠른가" — Slurm 에게 직접 물어본다.
+        fastest = placement.find_fastest(conn, snap, gpus=gpus, hours=hours)
         return {
             'ok': True,
             'me': snap.me,
@@ -39,6 +41,8 @@ def fetch(conn):
             'usage': services.get_my_usage(snap, snap.me),
             'diag': services.diagnose_pending(snap, snap.me),
             'nodes': services.get_node_availability(snap)[:5],
+            'fastest': fastest,
+            'want': {'gpus': gpus, 'hours': hours},
         }
     except Exception as exc:                       # noqa: BLE001
         return {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
@@ -113,15 +117,26 @@ def draw(stdscr, data, updated_at):
             f"고성능 {us['high_perf_in_use']}/{us['high_perf_limit']}   "
             f"실행 job {us['running_jobs']}/{us['running_jobs_limit']}")
 
+    # ── 핵심: 지금 바로 학습을 시작할 수 있나? ──────────────────────────
+    want = data['want']
+    fast = data['fastest']
     y += 2
-    line(y, "  지금 쓸 수 있는 노드", curses.A_BOLD)
-    for n in data['nodes']:
+    line(y, f"  ▶ 지금 학습 시작 (GPU {want['gpus']}개 · {want['hours']:g}시간)",
+         curses.A_BOLD)
+    y += 1
+    mark = '✔' if fast['can_start_now'] else '…'
+    line(y, f"    {mark} {fast['headline']}", curses.A_BOLD)
+
+    for o in fast['options']:
         y += 1
-        tag = '[HP]' if n['is_high_perf'] else '    '
-        line(y, f"    {tag} {n['name']:<12} 여유 {n['usable_gpus']}개")
-    if not data['nodes']:
+        limit = o['time_limit_seconds']
+        cap = f"최대 {limit // 3600}h" if limit else '무제한'
+        flag = '←' if o is fast['options'][0] else ' '
+        line(y, f"      {flag} {o['partition']:<12} {str(o['node']):<10} "
+                f"{o['wait_text']:<14} ({cap})")
+    for b in fast['blocked']:
         y += 1
-        line(y, "    (지금 바로 쓸 수 있는 노드 없음)")
+        line(y, f"      × {b['partition']:<12} {b['reason'][:40]}")
 
     y += 2
     line(y, "  진단", curses.A_BOLD)
@@ -136,10 +151,10 @@ def draw(stdscr, data, updated_at):
     stdscr.refresh()
 
 
-def run(stdscr, conn, interval):
+def run(stdscr, conn, interval, gpus, hours):
     curses.curs_set(0)
     stdscr.nodelay(True)
-    data = fetch(conn)
+    data = fetch(conn, gpus, hours)
     updated = time.time()
     draw(stdscr, data, updated)
 
@@ -149,7 +164,7 @@ def run(stdscr, conn, interval):
             return
         force = ch in (ord('r'), ord('R'))
         if force or time.time() - updated >= interval:
-            data = fetch(conn)
+            data = fetch(conn, gpus, hours)
             updated = time.time()
             draw(stdscr, data, updated)
         time.sleep(0.1)
@@ -159,6 +174,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--host', help='실서버 접속. 생략하면 config 의 mode')
     ap.add_argument('--interval', type=float, default=None, help='갱신 주기(초)')
+    ap.add_argument('--gpus', type=int, default=1, help='필요한 GPU 수')
+    ap.add_argument('--hours', type=float, default=2.0, help='학습할 시간')
     args = ap.parse_args()
 
     conn = SSHConnection(args.host) if args.host else connect()
@@ -169,7 +186,7 @@ def main():
         except Exception:                          # noqa: BLE001
             interval = 7
     try:
-        curses.wrapper(run, conn, interval)
+        curses.wrapper(run, conn, interval, args.gpus, args.hours)
     finally:
         conn.close()
 

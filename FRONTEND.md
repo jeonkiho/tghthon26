@@ -58,9 +58,10 @@ services.get_partitions(snap)             # 파티션별 사용 가능 여부
 
 | 만들 화면 | 부를 함수 | 핵심 필드 |
 |---|---|---|
+| **⭐ 지금 학습 시작 가능? (메인 기능)** | `placement.find_fastest(conn, snap, gpus, hours)` | `can_start_now`, `headline`, `options[]` |
 | 상단 바 (내 정보) | `whoami(snap)` | `user`, `is_undergrad`, `cluster`, `cluster_notice` |
 | GPU 현황 대시보드 | `get_gpu_status(snap)` | `used_gpus`/`total_gpus`, `free_gpus`, `pending_jobs` |
-| **대기 원인 진단 (메인 기능)** | `diagnose_pending(snap, me)` | `headline` (완성된 한 문장) |
+| 대기 원인 진단 | `diagnose_pending(snap, me)` | `headline` (완성된 한 문장) |
 | 내 사용량 게이지 | `get_my_usage(snap, me)` | `gpus_in_use`/`gpus_limit` 등 |
 | 노드 추천 목록 | `get_node_availability(snap)` | `name`, `usable_gpus` |
 | 파티션 선택 | `get_partitions(snap)` | `can_use` (색 결정) |
@@ -77,6 +78,14 @@ services.get_partitions(snap)             # 파티션별 사용 가능 여부
 ## 4. 화면 짤 때 꼭 알아야 할 규칙 (UI가 바뀌는 것들)
 
 이건 백엔드가 "판단"해서 필드로 내려주니, 프론트는 그 필드만 보고 그리면 된다.
+
+**⓪ `free_gpus` 가 남아 있어도 "지금 시작 가능"이 아니다.** ⚠️
+실서버에서 GPU 7개가 비어 있는 노드인데 Slurm 은 "3시간 뒤에나 시작 가능"이라고
+답한 적이 있다(우선순위 높은 대기 job 이 자원을 잡아둠). 같은 시각 다른 파티션은
+즉시 시작됐다. **"지금 되나?"는 반드시 `placement.find_fastest()` 로 물어볼 것.**
+여유 GPU 숫자로 직접 판단하면 틀린다. 이 함수는 Slurm 에게 직접 묻고
+`can_start_now` 와 완성된 `headline` 을 준다 (job 은 제출되지 않는다).
+단, 폴링 루프에 넣지 말고 사용자가 요청할 때만 부를 것.
 
 **① 대기의 대부분은 GPU 부족이 아니라 개인 할당량 초과다.**
 `diagnose_pending()`의 `headline`이 이 프로젝트의 킬러 기능이다. 완성된 한국어
