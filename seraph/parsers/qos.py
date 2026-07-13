@@ -84,6 +84,26 @@ def parse_assoc(text):
     return fallback or (None, None, None)
 
 
+def parse_accounts(text):
+    """sacctmgr show account -> {계정: 설명}
+
+    설명에 클러스터 이름이 적힌 계정이 있다:
+      ugrad_advisor_x|advisor managed moana ugrad gpu
+    소속 클러스터를 접미어로 추측하는 것보다 이게 정확하다.
+    """
+    out = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split('|')
+        if len(parts) < 2:
+            continue
+        account = parts[0].strip()
+        if account:
+            out[account] = parts[1].strip()
+    return out
+
+
 def parse_uptime(text):
     """uptime -> 1분 load average (실패하면 None)
 

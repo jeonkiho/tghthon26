@@ -48,6 +48,12 @@ ASSOC = 'sacctmgr -n -P show assoc user=$USER format=User,Account,QOS'
 # 로그인 노드 부하. load > 8 이면 폴링을 멈춰야 한다.
 UPTIME = 'uptime'
 
+# 계정 설명. 어느 클러스터 소속인지 여기 적혀 있는 경우가 있다.
+#   ugrad_advisor_x | advisor managed moana ugrad gpu   <- moana 라고 명시
+# 접미어로 학과를 추측하는 것보다 이게 정확하다. 계정은 거의 안 바뀌지만
+# 명령이 싸서 스냅샷에 같이 넣는다.
+ACCOUNTS = 'sacctmgr -n -P show account format=Account,Description'
+
 ALL = {
     'squeue': SQUEUE,
     'sinfo': SINFO,
@@ -55,6 +61,7 @@ ALL = {
     'squeue_start': SQUEUE_START,
     'qos': QOS,
     'assoc': ASSOC,
+    'accounts': ACCOUNTS,
     'uptime': UPTIME,
 }
 

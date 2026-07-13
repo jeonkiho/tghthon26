@@ -8,7 +8,7 @@ from . import clusters
 from .parsers import (
     parse_squeue, parse_squeue_start, parse_sinfo,
     parse_qos, parse_assoc, parse_uptime, parse_partitions,
-    parse_slurm_duration,
+    parse_slurm_duration, parse_accounts,
 )
 
 # config 를 안 넘겼을 때 쓰는 기본 한도. (설정 파일이 있으면 그쪽이 이긴다.)
@@ -32,15 +32,21 @@ class Snapshot:
     """
 
     def __init__(self, squeue, sinfo, partitions, squeue_start, qos, assoc,
-                 uptime, config=None):
+                 accounts, uptime, config=None):
         self.jobs = parse_squeue(squeue)
         self.nodes = parse_sinfo(sinfo)
         self.partitions = parse_partitions(partitions)
         self.start_times = parse_squeue_start(squeue_start)
         self.qos_limits = parse_qos(qos)
         self.me, self.account, self.my_qos_name = parse_assoc(assoc)
+        self.accounts = parse_accounts(accounts)    # {계정: 설명}
         self.load = parse_uptime(uptime)
         self.config = config or config_module.load()
+
+    @property
+    def account_description(self):
+        """내 계정의 설명. 소속 클러스터가 여기 적혀 있을 수 있다."""
+        return self.accounts.get(self.account)
 
     @property
     def my_qos(self):
@@ -101,10 +107,12 @@ def get_partitions(snapshot):
 def whoami(snapshot):
     """접속한 사용자의 신분과 소속 클러스터. 화면 상단/안내에 쓴다."""
     account = snapshot.account
-    info = clusters.belongs_here(account)
+    # 계정 설명에 클러스터가 적혀 있으면 그게 접미어 추측보다 정확하다.
+    info = clusters.belongs_here(account, snapshot.account_description)
     return {
         'user': snapshot.me,
         'account': account,
+        'account_description': snapshot.account_description,
         'qos': snapshot.my_qos_name,
         'is_undergrad': snapshot.is_undergrad,
         'position': clusters.position_from_account(account),

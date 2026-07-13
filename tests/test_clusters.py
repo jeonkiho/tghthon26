@@ -172,6 +172,50 @@ def test_whoami_ce_undergrad_gets_redirect_notice(grad):
     assert 'moana' in w['cluster_notice']
 
 
+# --- 계정 설명 기반 라우팅 (서버가 알려주는 사실) --------------------------------
+
+def test_description_beats_suffix_guess():
+    """계정 설명에 클러스터가 적혀 있으면 접미어 추측보다 우선한다."""
+    desc = 'advisor managed moana ugrad gpu'
+    assert clusters.cluster_from_description(desc) == 'moana'
+    info = clusters.belongs_here('ugrad_advisor_x', desc)
+    assert info['cluster'] == 'moana'
+    assert info['on_primary'] is False
+
+
+def test_advisor_account_unroutable_without_description():
+    """설명이 없으면 advisor_x 는 학과를 못 알아낸다 (그래서 설명이 필요했다)."""
+    assert clusters.major_from_account('ugrad_advisor_x') is None
+    assert clusters.belongs_here('ugrad_advisor_x')['cluster'] is None
+
+
+def test_description_without_cluster_name_is_ignored():
+    assert clusters.cluster_from_description('grad') is None
+    assert clusters.cluster_from_description('') is None
+    assert clusters.cluster_from_description(None) is None
+
+
+def test_every_real_account_routes():
+    """실서버에 존재하는 계정 9개가 전부 라우팅되어야 한다 (판단 실패 없음)."""
+    from seraph.parsers import parse_accounts
+    path = pathlib.Path(__file__).parent / 'fixtures' / 'accounts.txt'
+    accounts = parse_accounts(path.read_text())
+    assert len(accounts) >= 9
+    for account, description in accounts.items():
+        info = clusters.belongs_here(account, description)
+        assert info['cluster'] is not None, f'{account} 라우팅 실패'
+
+
+def test_snapshot_exposes_account_description(grad):
+    assert grad.accounts                        # 계정 설명 맵
+    assert grad.account_description is not None  # 내 계정(grad)의 설명
+
+
+def test_whoami_includes_description(grad):
+    w = services.whoami(grad)
+    assert 'account_description' in w
+
+
 def test_overview_lists_three_clusters():
     o = clusters.overview()
     assert set(o['clusters']) == {'ariel', 'moana', 'aurora'}

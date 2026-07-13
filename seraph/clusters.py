@@ -59,7 +59,14 @@ _ROUTING = {
     ('bme', 'undergrad'): 'moana',
 }
 
-# 계정(account) 접미어 -> 학과. sacctmgr 의 account 에서 뽑는다.
+# 계정(account) 접미어 -> 학과. 이건 "추측"이다. 계정 설명에 클러스터가 적혀
+# 있으면 그쪽(cluster_from_description)이 우선한다.
+#
+# 실서버에서 확인한 계정 9개와 실제 job 기록(최근 30일):
+#   grad(231명, 9934건) / ugrad(57명, 2932건)  <- ariel 에서 실제로 도는 건 이 둘뿐
+#   ugrad_ce(243) / ugrad_eebme(53) / ugrad_advisor_x(254) <- ariel job 0건 (moana)
+#   grad_ce(7) / grad_eebme(2) <- 거의 안 쓰임. 어차피 대학원생이라 ariel.
+# 즉 회계 DB 는 3개 클러스터가 공유하지만, ariel 에서 도는 건 grad/ugrad 뿐이다.
 _ACCOUNT_MAJOR = {
     'ce': 'ce',
     'eebme': 'ee',      # EE/BME 를 한 계정으로 묶는 경우. 어차피 둘 다 moana.
@@ -101,17 +108,43 @@ def position_from_account(account):
     return 'undergrad' if account.startswith('ugrad') else 'grad'
 
 
-def belongs_here(account):
+def cluster_from_description(description):
+    """계정 설명에 클러스터 이름이 적혀 있으면 그걸 쓴다 (가장 정확한 근거).
+
+      'advisor managed moana ugrad gpu' -> 'moana'
+
+    서버가 알려주는 사실이라 접미어 추측보다 우선한다. 없으면 None.
+    """
+    if not description:
+        return None
+    lowered = description.lower()
+    for name in CLUSTERS:
+        if name in lowered:
+            return name
+    return None
+
+
+def belongs_here(account, description=None):
     """이 계정이 우리가 접속하는 클러스터(ariel) 소속인가.
 
+    근거 우선순위:
+      1. 계정 설명에 적힌 클러스터 이름 (서버가 알려주는 사실)
+      2. 계정 접미어로 학과 추정 -> Major×Position 표
+      3. 대학원생이면 학과 무관 ariel
+
     반환: {'cluster', 'connectable', 'on_primary', 'advice'}
-    ariel 이 아니면 어디로 가야 하는지 안내를 담는다.
     """
     position = position_from_account(account)
     major = major_from_account(account)
-    target = cluster_for(major, position) if position else None
 
-    # 학과를 못 알아냈지만 ariel 에 접속했고 대학원생이면 ariel 이 맞다.
+    # 1순위: 설명에 명시된 클러스터
+    target = cluster_from_description(description)
+
+    # 2순위: 학과 × 신분
+    if target is None and position:
+        target = cluster_for(major, position)
+
+    # 3순위: 학과를 못 알아냈어도 대학원생이면 ariel
     if target is None and position == 'grad':
         target = 'ariel'
 
