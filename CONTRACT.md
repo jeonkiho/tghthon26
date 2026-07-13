@@ -121,10 +121,13 @@ r = placement.find_fastest(conn, snap, gpus=1, hours=2)
 "지금 바로 시작된다"는 이유로 학습을 debug 로 몰면 정작 디버깅하려는 사람이 못 쓴다.
 `config.yaml` 의 `placement.exclude_partitions` 로 조정 가능.
 
-**② 고성능 GPU 는 "의미 있게" 빠를 때만 추천한다.** 일반 GPU 만 요청해도 QOS 가
-허용하면 고성능도 함께 물어보지만, 30분 이상 빨라야 `best` 로 고른다(귀한 자원을
-1분 아끼자고 쓰면 안 된다). 사용자가 `high_perf=True` 로 직접 요구하면 존중한다.
-기준값은 `placement.high_perf_gain_seconds`.
+**② 고성능 GPU(m/k/n)는 자동 추천하지 않는다.** 따로 **신청해서 받은 사람만** 쓰는
+자원이기 때문이다(QOS 90개 중 40개가 `high_perf=0` 으로 아예 금지. 기본 `grad`/`ugrad`
+도 0). 도구가 임의로 몰아주면 안 된다. 사용자가 `high_perf=True` 로 명시할 때만 쓰고,
+자격이 없으면 `blocked` 에 "이 QOS 는 고성능 노드를 쓸 수 없습니다" 로 알려준다.
+
+프론트가 고성능 옵션을 노출하려면 `get_my_usage()` 의 `high_perf_limit` 을 먼저
+확인할 것 — `0` 이면 그 사용자는 신청을 안 한 것이니 아예 안 보여주는 게 낫다.
 
 ### ⚠️ 왜 이게 필요한가 — `free_gpus` 로는 알 수 없다
 

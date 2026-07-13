@@ -24,6 +24,8 @@ placement:
   exclude_partitions: [debug_grad, debug_ugrad]
   # 파티션마다 Slurm 에 물어볼 노드 후보 수. 노드별 시작 시각이 크게 다를 수 있다.
   probe_nodes: 5
+  # 고성능 노드(m/k/n)는 따로 신청한 사람만 쓴다. 자동 추천하지 않는다.
+  # (사용자가 명시적으로 요청할 때만 사용)
 
 # 세라프 운영 "권장" 정책 (서버가 강제하지 않음). 출처: KHU GPU Cluster User Guide.
 # 넘으면 경고만 하고 막지는 않는다. 학기마다 바뀔 수 있으니 가이드로 재확인할 것.

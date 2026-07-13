@@ -161,45 +161,34 @@ def test_best_includes_ready_script(conn, snap):
     assert '--gres=gpu:1' in script
 
 
-# --- 고성능 GPU 자동 고려 -------------------------------------------------------
+# --- 고성능 GPU: 신청자만 쓰는 자원이라 자동 추천 안 함 -------------------------
 
-def test_high_perf_also_probed(conn, snap):
-    """일반만 요청해도 QOS 가 허용하면 고성능도 후보에 넣는다."""
+def test_high_perf_never_auto_recommended(conn, snap):
+    """고성능 노드(m/k/n)는 따로 신청한 사람만 쓴다.
+
+    QOS 90개 중 40개가 high_perf=0 으로 아예 금지(기본 grad/ugrad 포함).
+    신청해서 받은 자원이니 도구가 임의로 몰아주면 안 된다.
+    """
     r = placement.find_fastest(conn, snap, gpus=1, hours=2)
-    kinds = {o['high_perf'] for o in r['options']}
-    assert kinds == {False, True}
-
-
-def test_high_perf_only_when_meaningfully_faster():
-    """고성능은 귀한 자원. 조금 빠르다고 추천하면 안 된다 (기본 30분 기준)."""
-    def opt(hp, wait):
-        return {'high_perf': hp, 'wait_seconds': wait, 'partition': 'batch_grad',
-                'time_limit_seconds': None}
-
-    # 1분만 빠름 -> 일반을 고른다
-    results = sorted([opt(False, 3600), opt(True, 3540)],
-                     key=lambda x: (x['wait_seconds'], x['high_perf']))
-    assert placement._pick_best(results, False, 1800)['high_perf'] is False
-
-    # 30분 빠름 -> 고성능을 고른다
-    results = sorted([opt(False, 3600), opt(True, 1800)],
-                     key=lambda x: (x['wait_seconds'], x['high_perf']))
-    assert placement._pick_best(results, False, 1800)['high_perf'] is True
+    assert all(not o['high_perf'] for o in r['options'])
+    assert r['best']['high_perf'] is False
 
 
 def test_explicit_high_perf_is_respected(conn, snap):
+    """사용자가 직접 요청하면 (그리고 QOS 가 허용하면) 쓴다."""
     r = placement.find_fastest(conn, snap, gpus=1, hours=2, high_perf=True)
     assert all(o['high_perf'] for o in r['options'])
     assert r['best']['high_perf'] is True
 
 
-def test_high_perf_not_probed_when_qos_forbids(conn):
-    """ugrad QOS 는 고성능 금지. 후보에 넣으면 안 된다."""
+def test_high_perf_request_without_entitlement_is_blocked(conn):
+    """미신청자(high_perf=0)가 고성능을 요청하면 막고 이유를 알려준다."""
     snap = conn.snapshot()
-    snap.account = 'ugrad'
-    snap.my_qos_name = 'ugrad'          # high_perf = 0
-    r = placement.find_fastest(snap and conn, snap, gpus=1, hours=2)
-    assert all(not o['high_perf'] for o in r['options'])
+    snap.my_qos_name = 'grad'           # high_perf = 0
+    r = placement.find_fastest(conn, snap, gpus=1, hours=2, high_perf=True)
+    assert r['best'] is None
+    assert r['blocked']
+    assert '고성능' in r['headline']
 
 
 def test_node_is_chosen(conn, snap):

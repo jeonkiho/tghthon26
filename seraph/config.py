@@ -35,9 +35,9 @@ DEFAULTS = {
         # 파티션마다 물어볼 노드 후보 수. 노드별로 시작 시각이 크게 다를 수 있다
         # (실측 3일 차이). 질의는 싸다 — 5회에 1초 미만.
         'probe_nodes': 5,
-        # 고성능 노드(m/k/n)는 귀한 자원이다. 일반 GPU 보다 이만큼(초) 이상
-        # 빨리 시작할 때만 추천한다. 1분 빠르다고 고성능을 쓰라고 하면 안 된다.
-        'high_perf_gain_seconds': 1800,     # 30분
+        # 고성능 노드(m/k/n)는 따로 신청해서 받은 사람만 쓴다.
+        # (QOS 90개 중 40개가 high_perf=0 으로 금지. 기본 grad/ugrad 도 0.)
+        # 자동 추천하지 않는다. 사용자가 명시적으로 요청할 때만 쓴다.
     },
     # 서버가 강제하지 않는 "권장" 정책. 가이드 기준. 넘으면 경고(차단은 아님).
     'policy': {
@@ -126,10 +126,6 @@ class Config:
     def probe_nodes(self):
         return int(self._data['placement']['probe_nodes'])
 
-    @property
-    def high_perf_gain_seconds(self):
-        """고성능 노드를 추천하려면 이만큼은 빨라야 한다."""
-        return int(self._data['placement']['high_perf_gain_seconds'])
 
     @property
     def blocked_paths(self):

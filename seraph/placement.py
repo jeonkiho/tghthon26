@@ -146,12 +146,10 @@ def find_fastest(conn, snapshot, *, gpus=1, hours=2.0, high_perf=False,
         probe_nodes = snapshot.config.probe_nodes
     partitions = candidate_partitions(snapshot, hours)
 
-    # GPU 종류: 사용자가 고성능을 딱 집어 요구하지 않았고 QOS 가 허용하면,
-    # 고성능도 함께 물어본다. 지금은 일반이 막혀도 고성능이 빌 수 있다.
+    # 고성능 노드(m/k/n)는 **따로 신청해서 받은 사람만** 쓰는 자원이다.
+    # (QOS 90개 중 40개가 high_perf=0 으로 아예 금지, 기본 grad/ugrad 도 0)
+    # 그래서 자동으로 추천하지 않는다. 사용자가 high_perf=True 로 명시할 때만 쓴다.
     kinds = [high_perf]
-    limit = snapshot.my_qos
-    if not high_perf and limit and (limit.max_high_perf_gpus or 0) >= gpus:
-        kinds.append(True)
 
     results = []
     blocked = []
@@ -194,7 +192,7 @@ def find_fastest(conn, snapshot, *, gpus=1, hours=2.0, high_perf=False,
                                 r['high_perf'],
                                 -(r['time_limit_seconds'] or 1 << 30)))
 
-    best = _pick_best(results, high_perf, snapshot.config.high_perf_gain_seconds)
+    best = results[0] if results else None
     can_now = bool(best and best['starts_now'])
 
     return {
@@ -205,31 +203,6 @@ def find_fastest(conn, snapshot, *, gpus=1, hours=2.0, high_perf=False,
         'requested': {'gpus': gpus, 'hours': hours, 'high_perf': high_perf},
         'headline': _headline(can_now, best, results, blocked, gpus),
     }
-
-
-def _pick_best(results, requested_high_perf, gain_threshold):
-    """가장 좋은 후보. 고성능은 "의미 있게" 빠를 때만 고른다.
-
-    고성능 노드(m/k/n)는 귀한 자원이다. 1분 빨리 시작한다고 고성능을 쓰라고
-    추천하면 안 된다. gain_threshold(기본 30분) 이상 빨라야 추천한다.
-    사용자가 고성능을 직접 요구했으면 그대로 존중한다.
-    """
-    if not results:
-        return None
-    if requested_high_perf:
-        return results[0]
-
-    standard = [r for r in results if not r['high_perf']]
-    if not standard:
-        return results[0]           # 일반으로는 아예 못 냄 -> 고성능뿐
-
-    best_std = standard[0]
-    best_any = results[0]
-    if best_any is best_std:
-        return best_std
-
-    gain = (best_std['wait_seconds'] or 0) - (best_any['wait_seconds'] or 0)
-    return best_any if gain >= gain_threshold else best_std
 
 
 def _public(r):
@@ -255,14 +228,5 @@ def _headline(can_now, best, results, blocked, gpus):
         cap = f' (최대 {limit // 3600}시간 제한)' if limit else ''
         return f'지금 바로 시작할 수 있습니다 → {where} ({kind}){cap}'
 
-    line = (f'지금 바로는 어렵습니다. 가장 빨리 시작하는 곳은 {where} '
-            f'({kind}) — {best["wait_text"]}입니다.')
-
-    # 고성능을 골랐다면 왜 그랬는지 밝힌다 (일반보다 얼마나 빠른지).
-    if best.get('high_perf'):
-        std = next((r for r in results if not r['high_perf']), None)
-        if std:
-            gain = (std['wait_seconds'] or 0) - (best['wait_seconds'] or 0)
-            line += (f' 일반 GPU 는 {std["wait_text"]}라 '
-                     f'{_fmt_wait(gain).replace("뒤", "")} 더 걸립니다.')
-    return line
+    return (f'지금 바로는 어렵습니다. 여기에 올려두면 가장 빨리 시작합니다 → '
+            f'{where} ({kind}) — {best["wait_text"]}')
