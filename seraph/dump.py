@@ -97,8 +97,12 @@ def main(argv=None):
     cfg = config_module.load()
 
     if args.host:
-        from .connection import SSHConnection
-        conn = SSHConnection(args.host, config=cfg)
+        from .connection import SSHConnection, AuthError
+        try:
+            conn = SSHConnection(args.host, config=cfg)
+        except AuthError as exc:
+            print(f'접속 실패: {exc}', file=sys.stderr)
+            raise SystemExit(1)
     elif args.mock:
         from .connection import MockConnection
         conn = MockConnection(config=cfg)
