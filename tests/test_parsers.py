@@ -126,8 +126,12 @@ def test_parse_qos_limits():
 
 
 def test_parse_assoc_and_uptime():
-    assert parse_assoc('user01|qos_user01_2026_1\n') == ('user01', 'qos_user01_2026_1')
-    assert parse_assoc('') == (None, None)
+    # User|Account|QOS
+    assert parse_assoc('user01|grad|qos_user01_2026_1\n') == (
+        'user01', 'grad', 'qos_user01_2026_1')
+    assert parse_assoc('') == (None, None, None)
+    # QOS 없는 줄은 계정만이라도 살린다
+    assert parse_assoc('user01|ugrad|\n') == ('user01', 'ugrad', None)
     assert parse_uptime(' 13:24:35 up 5 days, 32 users,  load average: 4.61, 3.64, 3.10') == 4.61
     assert parse_uptime('nonsense') is None
 

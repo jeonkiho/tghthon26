@@ -4,6 +4,7 @@
 """
 
 from . import config as config_module
+from . import clusters
 from .parsers import (
     parse_squeue, parse_squeue_start, parse_sinfo,
     parse_qos, parse_assoc, parse_uptime, parse_partitions,
@@ -37,7 +38,7 @@ class Snapshot:
         self.partitions = parse_partitions(partitions)
         self.start_times = parse_squeue_start(squeue_start)
         self.qos_limits = parse_qos(qos)
-        self.me, self.my_qos_name = parse_assoc(assoc)
+        self.me, self.account, self.my_qos_name = parse_assoc(assoc)
         self.load = parse_uptime(uptime)
         self.config = config or config_module.load()
 
@@ -46,7 +47,17 @@ class Snapshot:
         return self.qos_limits.get(self.my_qos_name)
 
     @property
+    def is_undergrad(self):
+        """학부생인가. 계정이 ugrad 로 시작하면 학부. 모르면 None."""
+        if not self.account:
+            return None
+        return self.account.startswith('ugrad')
+
+    @property
     def default_partition(self):
+        """내 신분에 맞는 기본 파티션. 학부생이면 batch_ugrad."""
+        if self.is_undergrad:
+            return self.config.undergrad_partition
         return self.config.default_partition
 
 
@@ -55,8 +66,55 @@ def _nodes_in(snapshot, partition):
 
 
 def _partition(snapshot, partition):
-    """None 이면 config 의 기본 파티션."""
+    """None 이면 config 의 기본 파티션(신분에 맞춰)."""
     return partition or snapshot.default_partition
+
+
+def can_use_partition(snapshot, partition):
+    """이 사용자가 이 파티션에 job 을 낼 수 있는가.
+
+    세라프 파티션은 계정으로 갈린다: *_ugrad 는 학부, *_grad 는 대학원, admin 은 root.
+    사용자 계정을 모르면(mock 등) 막지 않고 True 로 둔다.
+    """
+    undergrad = snapshot.is_undergrad
+    if 'admin' in partition:
+        return False                    # 학생은 admin 파티션을 못 쓴다
+    if undergrad is None:
+        return True                     # 신분 불명이면 판단 보류
+    if partition.endswith('_ugrad'):
+        return undergrad
+    if partition.endswith('_grad'):
+        return not undergrad
+    return True
+
+
+def get_partitions(snapshot):
+    """모든 파티션 + 내가 쓸 수 있는지(can_use). 프론트가 회색/자물쇠로 그린다."""
+    out = {}
+    for name, p in snapshot.partitions.items():
+        d = p.to_dict()
+        d['can_use'] = can_use_partition(snapshot, name)
+        out[name] = d
+    return out
+
+
+def whoami(snapshot):
+    """접속한 사용자의 신분과 소속 클러스터. 화면 상단/안내에 쓴다."""
+    account = snapshot.account
+    info = clusters.belongs_here(account)
+    return {
+        'user': snapshot.me,
+        'account': account,
+        'qos': snapshot.my_qos_name,
+        'is_undergrad': snapshot.is_undergrad,
+        'position': clusters.position_from_account(account),
+        'major': clusters.major_from_account(account),
+        'cluster': info['cluster'],           # 소속 클러스터 (ariel/moana/aurora)
+        'on_primary': info['on_primary'],      # 이 도구가 보는 클러스터가 맞는가
+        'default_partition': snapshot.default_partition,
+        # ariel 이 아니면 "저 서버로 가라" 안내가 채워진다
+        'cluster_notice': info['advice'],
+    }
 
 
 def get_gpu_status(snapshot, partition=None):
@@ -115,9 +173,13 @@ def get_node_availability(snapshot, partition=None, need_gpus=1,
     if high_perf and limit and limit.max_high_perf_gpus == 0:
         return []
 
+    # 학부생은 정해진 노드만 쓸 수 있다. 못 쓰는 노드는 추천에서 뺀다.
+    allowed = set(snapshot.config.undergrad_nodes) if snapshot.is_undergrad else None
+
     candidates = [
         n for n in _nodes_in(snapshot, partition)
         if n.usable_gpus >= need_gpus and n.is_high_perf == high_perf
+        and (allowed is None or n.name in allowed)
     ]
     candidates.sort(key=lambda n: -n.usable_gpus)
     return [n.to_dict() for n in candidates]
@@ -443,7 +505,17 @@ def lint_job(snapshot, *, partition=None, gpus=1, high_perf=False, paths=(),
             'code': 'UNKNOWN_PARTITION',
             'message': f"'{partition}' 파티션이 없습니다. 사용 가능: {known}",
         })
-    elif time_limit is not None:
+    elif not can_use_partition(snapshot, partition):
+        mine = snapshot.default_partition
+        who = '학부생' if snapshot.is_undergrad else '대학원생'
+        problems.append({
+            'level': 'block',
+            'code': 'PARTITION_NOT_ALLOWED',
+            'message': (f"'{partition}' 파티션은 당신({who}) 계정으로 쓸 수 없습니다. "
+                        f"'{mine}' 를 쓰세요. 이대로 내면 세라프가 거절합니다."),
+        })
+
+    if partition in snapshot.partitions and time_limit is not None:
         allowed = snapshot.partitions[partition].time_limit_seconds
         requested = parse_slurm_duration(time_limit)
         if allowed is not None and requested is not None and requested > allowed:
@@ -459,6 +531,17 @@ def lint_job(snapshot, *, partition=None, gpus=1, high_perf=False, paths=(),
         problem = _lint_node_type(snapshot, node, high_perf)
         if problem:
             problems.append(problem)
+        # 학부생은 정해진 노드만 쓸 수 있다 (batch_ugrad + QOS high_perf=0).
+        if snapshot.is_undergrad and node not in cfg.undergrad_nodes:
+            problems.append({
+                'level': 'block',
+                'code': 'UNDERGRAD_NODE_RESTRICTED',
+                'message': (f'학부생은 {node} 를 쓸 수 없습니다. '
+                            f"쓸 수 있는 노드: {', '.join(cfg.undergrad_nodes)}."),
+            })
+
+    # 서버가 강제하지 않는 "권장" 정책 경고 (차단 아님)
+    problems.extend(_policy_warnings(snapshot, gpus, time_limit))
 
     for path in paths:
         blocked = _matches_path(path, cfg.blocked_paths)
@@ -501,6 +584,53 @@ def _fmt_duration(seconds):
     if hours:
         return f'{hours}시간'
     return f'{minutes}분'
+
+
+def _policy_warnings(snapshot, gpus, time_limit):
+    """세라프가 강제하지 않지만 가이드가 정한 "권장" 한도 경고.
+
+    서버는 batch_grad walltime 을 무제한으로 두지만, 가이드는 최대 6일을 권장한다.
+    GPU 개수도 기본값(학부 1/대학원 4)을 넘으면 "상향 신청" 이 필요하다.
+    전부 warn 이다 — 실제로 제출은 되니 막지 않는다.
+    """
+    policy = snapshot.config.policy
+    undergrad = snapshot.is_undergrad
+    out = []
+
+    max_days = policy.get('walltime_max_days')
+    if max_days and time_limit is not None:
+        requested = parse_slurm_duration(time_limit)
+        if requested is not None and requested > max_days * 86400:
+            out.append({
+                'level': 'warn',
+                'code': 'OVER_POLICY_WALLTIME',
+                'message': (f'권장 최대 실행 시간은 {max_days}일입니다 '
+                            f'(요청: {_fmt_duration(requested)}). 서버가 막지는 '
+                            f'않지만 관리자 정책에 어긋납니다.'),
+            })
+
+    if undergrad is None:
+        return out          # 신분 불명이면 GPU 정책 판단 보류
+
+    key = 'undergrad' if undergrad else 'grad'
+    default = policy.get(f'{key}_gpu_default')
+    hard_max = policy.get(f'{key}_gpu_max')
+    who = '학부생' if undergrad else '대학원생'
+    if hard_max and gpus > hard_max:
+        out.append({
+            'level': 'warn',
+            'code': 'OVER_POLICY_GPU_MAX',
+            'message': (f'{who} 권장 최대 GPU 는 {hard_max}개입니다 (요청: {gpus}). '
+                        f'상향 신청이 필요할 수 있습니다.'),
+        })
+    elif default and gpus > default:
+        out.append({
+            'level': 'warn',
+            'code': 'OVER_POLICY_GPU_DEFAULT',
+            'message': (f'{who} 기본 GPU 한도는 {default}개입니다 (요청: {gpus}). '
+                        f'상향 신청 시 최대 {hard_max}개까지 가능합니다.'),
+        })
+    return out
 
 
 def should_poll(snapshot):

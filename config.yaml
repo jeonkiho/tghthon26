@@ -11,7 +11,19 @@ connection:
   login_node_load_limit: 8.0  # 1분 load 가 이 이상이면 폴링을 쉰다
 
 cluster:
-  default_partition: batch_grad
+  default_partition: batch_grad       # 대학원생 기본 파티션
+  undergrad_partition: batch_ugrad    # 학부생 기본 파티션
+  # 학부생이 실제로 쓸 수 있는 노드 (서버에서 확인, 가이드의 ariel-v[6-12])
+  undergrad_nodes: [ariel-v6, ariel-v7, ariel-v8, ariel-v9, ariel-v10, ariel-v11, ariel-v12]
+
+# 세라프 운영 "권장" 정책 (서버가 강제하지 않음). 출처: KHU GPU Cluster User Guide.
+# 넘으면 경고만 하고 막지는 않는다. 학기마다 바뀔 수 있으니 가이드로 재확인할 것.
+policy:
+  walltime_max_days: 6
+  grad_gpu_default: 4
+  grad_gpu_max: 16
+  undergrad_gpu_default: 1
+  undergrad_gpu_max: 16
 
 lint:
   # 학습 데이터를 여기서 바로 읽으면 안 된다. 노드 로컬로 복사해서 쓴다.

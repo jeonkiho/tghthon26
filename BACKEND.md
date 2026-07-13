@@ -41,6 +41,11 @@ python -m seraph.dump --host ariel --section status
 `sacct`(끝난 job)는 폴링 스냅샷에 넣지 않았다. 느리고 자주 바뀌지 않으므로
 `conn.sacct(days=7)` 로 사용자가 요청할 때만 부른다.
 
+[clusters.py](seraph/clusters.py) — 세라프는 클러스터가 3개(ariel/moana/aurora)다.
+이 도구는 **ariel 만 접속**하고(나머지는 계정이 없다), 3개의 라우팅 규칙은 데이터로
+갖고 있어 "당신은 moana 를 쓰세요" 같은 안내를 한다. 파티션 접근(대학원 `*_grad` /
+학부 `*_ugrad`)과 학부생 노드 제한(`ariel-v[6-12]`)도 여기 규칙을 따른다.
+
 [slack/](seraph/slack/)은 세라프와 무관한 별도 계통이다. Slack 공지 채널을 읽어
 TUI 에 보여준다. 토큰이 없으면 저장된 mock 공지를 준다.
 

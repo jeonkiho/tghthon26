@@ -17,7 +17,7 @@ from . import history, notify, slack
 
 SECTIONS = ('status', 'diagnose', 'nodes', 'usage', 'lint', 'wait',
             'sbatch', 'tutorial', 'announcements', 'history', 'result',
-            'notify', 'config', 'partitions')
+            'notify', 'config', 'partitions', 'whoami', 'clusters')
 
 # sacct 는 스냅샷과 달리 요청할 때만 부른다. 그래서 conn 이 필요하다.
 _NEEDS_CONNECTION = ('history', 'result')
@@ -36,7 +36,12 @@ def build(snapshot, args, conn=None):
     if args.section == 'usage':
         return services.get_my_usage(snapshot, user)
     if args.section == 'partitions':
-        return {name: p.to_dict() for name, p in snapshot.partitions.items()}
+        return services.get_partitions(snapshot)     # can_use 포함
+    if args.section == 'whoami':
+        return services.whoami(snapshot)
+    if args.section == 'clusters':
+        from . import clusters
+        return clusters.overview()
     if args.section == 'lint':
         # 일부러 위반하는 예시. 프론트가 문제 목록 모양을 볼 수 있게 한다.
         return services.lint_job(snapshot, gpus=99, high_perf=True,

@@ -48,7 +48,7 @@ Slack 공지는 세라프 SSH 와 무관하다. `snapshot()` 폴링에 묶지 �
 
 ---
 
-## 반드시 알아야 할 것 네 가지
+## 반드시 알아야 할 것 다섯 가지
 
 **1. `free_gpus` 는 "지금 실제로 쓸 수 있는" GPU다.**
 GPU가 비어 있어도 그 노드에 idle CPU가 없으면 Slurm은 job을 배정하지 않는다.
@@ -71,6 +71,66 @@ QOS 한도는 **사람마다 다르다** (`grad` 는 GPU 4개 + 고성능 금지
 `generate_sbatch()` 가 v/g 노드를 자동으로 골라 넣으므로 프론트는 신경 쓸 필요
 없지만, 튜토리얼에서 사용자에게 알려줄 내용이다. 고성능(`gpu:high_perf:N`)은
 노드 지정 없이 통과한다. 아래 모든 규칙은 `sbatch --test-only` 로 실제 확인했다.
+
+**5. 세라프는 클러스터가 3개다. 이 도구는 ariel 만 접속한다.**
+ariel(AI 학부+모든 대학원생) / moana(EE/BME/CE 학부) / aurora(SWCON 학부).
+접속한 사용자가 ariel 소속이 아니면 `whoami()` 가 "moana 로 가세요" 안내를 준다.
+ariel 안에서도 **대학원생은 `*_grad`, 학부생은 `*_ugrad`** 파티션만 쓸 수 있고
+(서버가 강제), 학부생은 `ariel-v[6-12]` 노드만 쓴다. `get_partitions()` 의
+`can_use` 로 프론트가 회색/자물쇠 처리하면 된다.
+
+---
+
+## `whoami(snap)` — 접속한 사용자가 누구인가
+
+화면 상단과 "여기 아님" 안내에 쓴다.
+
+```json
+{
+  "user": "user01", "account": "grad", "qos": "qos_user01_2026_1",
+  "is_undergrad": false, "position": "grad", "major": null,
+  "cluster": "ariel", "on_primary": true,
+  "default_partition": "batch_grad",
+  "cluster_notice": ""
+}
+```
+
+- `is_undergrad` 로 화면을 학부/대학원 모드로 나눌 수 있다. (모르면 `null`)
+- **`on_primary` 가 `false` 면 이 사용자는 ariel 소속이 아니다.** `cluster_notice`
+  에 "당신(CE 학부생)은 moana 를 쓰세요..." 같은 완성된 안내가 들어온다. 그걸 크게
+  띄우고 나머지 실시간 화면은 참고용으로만 보여주면 된다.
+- `default_partition` 은 이 사용자에게 맞는 기본 파티션(대학원=batch_grad,
+  학부=batch_ugrad). `get_gpu_status` 등에 partition 을 안 넘기면 이게 쓰인다.
+
+## `get_partitions(snap)` — 파티션별 사용 가능 여부
+
+```json
+{
+  "batch_grad":  {"name": "batch_grad", "time_limit_seconds": null,
+                  "node_count": 23, "is_default": false, "can_use": true},
+  "batch_ugrad": {"... ", "can_use": false},
+  "admin":       {"... ", "can_use": false}
+}
+```
+
+`can_use` 로 색을 정한다: `true` → 파랑/선택 가능, `false` → 회색+자물쇠.
+숨기지 말고 회색으로 남기는 걸 권장(왜 못 쓰는지 보이게).
+
+## `clusters.overview()` — 3개 클러스터 전체 그림
+
+튜토리얼/안내용. 실시간 아님.
+
+```json
+{
+  "primary": "ariel",
+  "note": "이 도구는 ariel 만 실시간 조회합니다. 나머지는 안내만 제공합니다.",
+  "clusters": {
+    "ariel":  {"host": "ariel.khu.ac.kr",  "total_gpus": 182, "allowed": "AI 학부생 + 모든 대학원생", "connectable": true},
+    "moana":  {"host": "moana.khu.ac.kr",  "total_gpus": 121, "allowed": "EE/BME/CE 학부생", "connectable": false},
+    "aurora": {"host": "aurora.khu.ac.kr", "total_gpus": 62,  "allowed": "SWCON 학부생", "connectable": false}
+  }
+}
+```
 
 ---
 
@@ -246,10 +306,18 @@ Slurm이 계산한 값을 쓴다. 직접 계산하지 않는다.
 | `NODE_TYPE_MISMATCH` | block | GRES 타입과 노드 종류 불일치 (`gpu:1` + `ariel-k1`) |
 | `NODE_UNAVAILABLE` | block | 노드가 drained/down |
 | `NO_ELIGIBLE_NODE` | block | 그 GPU 수를 올릴 일반 노드가 없음 |
+| `PARTITION_NOT_ALLOWED` | block | 내 계정으로 못 쓰는 파티션 (학부/대학원 불일치) |
+| `UNDERGRAD_NODE_RESTRICTED` | block | 학부생이 `ariel-v[6-12]` 밖 노드 지정 |
 | `BLOCKED_PATH` | block | 금지 경로 (`config.yaml` 의 `lint.blocked_paths`) |
 | `NODE_BUSY` | warn | 지정한 노드에 여유 GPU 없음. 제출은 되지만 기다림 |
+| `OVER_POLICY_WALLTIME` | warn | 권장 최대 실행 시간(6일) 초과. 서버는 막지 않음 |
+| `OVER_POLICY_GPU_DEFAULT` | warn | 기본 GPU 한도 초과(학부 1/대학원 4). 상향 신청 필요 |
+| `OVER_POLICY_GPU_MAX` | warn | 권장 최대 GPU 초과 |
 | `DISCOURAGED_PATH` | warn | 권장하지 않는 경로 (`lint.warn_paths`) |
 | `LOGIN_NODE_BUSY` | warn | 로그인 노드 load ≥ 8 |
+
+`block` 은 세라프가 실제로 거절하는 것(계정/파티션, 노드, QOS 한도).
+`OVER_POLICY_*` 는 서버가 강제하지 않는 **권장 정책** 경고라 `warn` 이다(제출은 됨).
 
 경로 규칙은 `config.yaml` 에서 온다. 코드에 박혀 있지 않다.
 디렉터리 경계를 지켜 비교하므로 `/home/` 규칙이 `/homework/data` 를 잡지 않는다.

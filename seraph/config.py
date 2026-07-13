@@ -19,7 +19,20 @@ DEFAULTS = {
         'login_node_load_limit': 8.0,
     },
     'cluster': {
-        'default_partition': 'batch_grad',
+        'default_partition': 'batch_grad',      # 대학원생 기본
+        'undergrad_partition': 'batch_ugrad',   # 학부생 기본
+        # 학부생이 실제로 쓸 수 있는 노드 (batch_ugrad + QOS high_perf=0 의 결과).
+        # 가이드: ariel-v[6-12]. 서버에서 확인함.
+        'undergrad_nodes': ['ariel-v6', 'ariel-v7', 'ariel-v8', 'ariel-v9',
+                            'ariel-v10', 'ariel-v11', 'ariel-v12'],
+    },
+    # 서버가 강제하지 않는 "권장" 정책. 가이드 기준. 넘으면 경고(차단은 아님).
+    'policy': {
+        'walltime_max_days': 6,       # 상향 신청 시 최대
+        'grad_gpu_default': 4,
+        'grad_gpu_max': 16,
+        'undergrad_gpu_default': 1,
+        'undergrad_gpu_max': 16,      # 학부 연구원 기준
     },
     'lint': {
         'blocked_paths': ['/nas2/'],
@@ -78,6 +91,18 @@ class Config:
     @property
     def default_partition(self):
         return self._data['cluster']['default_partition']
+
+    @property
+    def undergrad_partition(self):
+        return self._data['cluster']['undergrad_partition']
+
+    @property
+    def undergrad_nodes(self):
+        return list(self._data['cluster']['undergrad_nodes'])
+
+    @property
+    def policy(self):
+        return self._data['policy']
 
     @property
     def blocked_paths(self):

@@ -59,21 +59,29 @@ def parse_qos(text):
 
 
 def parse_assoc(text):
-    """sacctmgr show assoc user=$USER -> (사용자명, QOS 이름)
+    """sacctmgr show assoc user=$USER -> (사용자명, 계정, QOS 이름)
 
-    둘 다 못 찾으면 (None, None). 사용자명이 여기 들어있어서 whoami 를 따로 안 부른다.
+    셋 다 못 찾으면 (None, None, None). 사용자명이 여기 들어있어서 whoami 를 안 부른다.
+    계정(account)은 학부/대학원 판별의 근거다.
+
+    한 사용자가 여러 계정·QOS 를 가질 수 있다. QOS 가 붙은 줄을 우선하고,
+    없으면 계정이라도 있는 첫 줄을 쓴다.
     """
+    fallback = None
     for line in text.splitlines():
         if not line.strip():
             continue
         parts = line.split('|')
-        if len(parts) < 2:
+        if len(parts) < 3:
             continue
-        user, qos = parts[0].strip(), parts[1].strip()
+        user = parts[0].strip() or None
+        account = parts[1].strip() or None
+        qos = parts[2].strip()
         if qos:
-            # 여러 개면 쉼표로 온다. 첫 번째를 쓴다.
-            return user or None, qos.split(',')[0]
-    return None, None
+            return user, account, qos.split(',')[0]
+        if fallback is None and account:
+            fallback = (user, account, None)
+    return fallback or (None, None, None)
 
 
 def parse_uptime(text):

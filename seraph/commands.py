@@ -41,7 +41,9 @@ QOS = (
 )
 
 # 현재 사용자가 어떤 QOS 에 속하는지. 사람마다 한도가 다르다.
-ASSOC = 'sacctmgr -n -P show assoc user=$USER format=User,QOS'
+# Account 는 학부/대학원(그리고 학과) 판별의 근거다. ugrad/grad 로 시작하면
+# 학부/대학원, _ce·_eebme 접미어는 학과. 파티션 접근이 이걸로 갈린다.
+ASSOC = 'sacctmgr -n -P show assoc user=$USER format=User,Account,QOS'
 
 # 로그인 노드 부하. load > 8 이면 폴링을 멈춰야 한다.
 UPTIME = 'uptime'
