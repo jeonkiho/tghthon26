@@ -83,11 +83,25 @@ def test_seconds_until_rejected_is_none():
 
 # --- 후보 파티션 --------------------------------------------------------------
 
-def test_debug_excluded_for_long_jobs(snap):
-    """debug_* 는 4시간 제한. 12시간 학습은 아예 못 낸다."""
-    short = placement.candidate_partitions(snap, hours=2)
-    long = placement.candidate_partitions(snap, hours=12)
-    assert 'debug_grad' in short
+def test_debug_never_recommended_for_training(snap):
+    """debug_* 는 디버깅용이다. "지금 바로 된다"는 이유로 학습을 몰면 안 된다.
+
+    (config 의 placement.exclude_partitions)
+    """
+    assert 'debug_grad' not in placement.candidate_partitions(snap, hours=2)
+    assert 'debug_grad' not in placement.candidate_partitions(snap, hours=12)
+    assert 'batch_grad' in placement.candidate_partitions(snap, hours=2)
+
+
+def test_debug_can_be_included_explicitly(snap):
+    """빼는 건 정책이지 불가능이 아니다. 필요하면 볼 수 있어야 한다."""
+    both = placement.candidate_partitions(snap, hours=2, include_excluded=True)
+    assert 'debug_grad' in both
+
+
+def test_time_limit_still_filters(snap):
+    """debug 를 억지로 포함해도 12시간 학습은 4시간 제한에 걸려 빠진다."""
+    long = placement.candidate_partitions(snap, hours=12, include_excluded=True)
     assert 'debug_grad' not in long
     assert 'batch_grad' in long
 
@@ -109,13 +123,11 @@ def test_undergrad_gets_ugrad_partitions(conn):
 
 # --- find_fastest -------------------------------------------------------------
 
-def test_finds_immediate_start(conn, snap):
-    """mock: debug 는 즉시, batch 는 3시간 뒤 -> debug 를 골라야 한다."""
+def test_recommends_batch_not_debug(conn, snap):
+    """debug 가 "지금 바로" 라도 학습은 batch 에 추천해야 한다."""
     r = placement.find_fastest(conn, snap, gpus=1, hours=2)
-    assert r['can_start_now'] is True
-    assert r['best']['partition'] == 'debug_grad'
-    assert r['best']['starts_now'] is True
-    assert '지금 바로' in r['headline']
+    assert r['best']['partition'] == 'batch_grad'
+    assert all(o['partition'] != 'debug_grad' for o in r['options'])
 
 
 def test_options_sorted_by_wait(conn, snap):
@@ -133,9 +145,11 @@ def test_long_job_cannot_start_now(conn, snap):
     assert r['best']['wait_seconds'] > 0
 
 
-def test_headline_mentions_time_limit_when_starting_now(conn, snap):
+def test_headline_gives_wait_time(conn, snap):
+    """지금 안 되면 언제 되는지 알려준다 (올려두면 되니까)."""
     r = placement.find_fastest(conn, snap, gpus=1, hours=2)
-    assert '4시간 제한' in r['headline']       # debug 의 함정을 알려준다
+    assert '가장 빨리' in r['headline']
+    assert r['best']['wait_text'] in r['headline']
 
 
 def test_best_includes_ready_script(conn, snap):
@@ -143,8 +157,49 @@ def test_best_includes_ready_script(conn, snap):
     r = placement.find_fastest(conn, snap, gpus=1, hours=2)
     script = r['best']['script']
     assert script.startswith('#!/bin/bash')
-    assert '#SBATCH --partition=debug_grad' in script
+    assert '#SBATCH --partition=batch_grad' in script
     assert '--gres=gpu:1' in script
+
+
+# --- 고성능 GPU 자동 고려 -------------------------------------------------------
+
+def test_high_perf_also_probed(conn, snap):
+    """일반만 요청해도 QOS 가 허용하면 고성능도 후보에 넣는다."""
+    r = placement.find_fastest(conn, snap, gpus=1, hours=2)
+    kinds = {o['high_perf'] for o in r['options']}
+    assert kinds == {False, True}
+
+
+def test_high_perf_only_when_meaningfully_faster():
+    """고성능은 귀한 자원. 조금 빠르다고 추천하면 안 된다 (기본 30분 기준)."""
+    def opt(hp, wait):
+        return {'high_perf': hp, 'wait_seconds': wait, 'partition': 'batch_grad',
+                'time_limit_seconds': None}
+
+    # 1분만 빠름 -> 일반을 고른다
+    results = sorted([opt(False, 3600), opt(True, 3540)],
+                     key=lambda x: (x['wait_seconds'], x['high_perf']))
+    assert placement._pick_best(results, False, 1800)['high_perf'] is False
+
+    # 30분 빠름 -> 고성능을 고른다
+    results = sorted([opt(False, 3600), opt(True, 1800)],
+                     key=lambda x: (x['wait_seconds'], x['high_perf']))
+    assert placement._pick_best(results, False, 1800)['high_perf'] is True
+
+
+def test_explicit_high_perf_is_respected(conn, snap):
+    r = placement.find_fastest(conn, snap, gpus=1, hours=2, high_perf=True)
+    assert all(o['high_perf'] for o in r['options'])
+    assert r['best']['high_perf'] is True
+
+
+def test_high_perf_not_probed_when_qos_forbids(conn):
+    """ugrad QOS 는 고성능 금지. 후보에 넣으면 안 된다."""
+    snap = conn.snapshot()
+    snap.account = 'ugrad'
+    snap.my_qos_name = 'ugrad'          # high_perf = 0
+    r = placement.find_fastest(snap and conn, snap, gpus=1, hours=2)
+    assert all(not o['high_perf'] for o in r['options'])
 
 
 def test_node_is_chosen(conn, snap):

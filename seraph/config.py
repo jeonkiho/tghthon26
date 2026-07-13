@@ -26,6 +26,19 @@ DEFAULTS = {
         'undergrad_nodes': ['ariel-v6', 'ariel-v7', 'ariel-v8', 'ariel-v9',
                             'ariel-v10', 'ariel-v11', 'ariel-v12'],
     },
+    'placement': {
+        # 학습(training) 추천에서 제외할 파티션.
+        # debug_* 는 디버깅·짧은 테스트용이다. 4시간 제한이 있고, 학습을 여기로
+        # 몰면 정작 디버깅하려는 사람이 못 쓴다. "지금 바로 된다"는 이유로
+        # 추천하면 안 된다.
+        'exclude_partitions': ['debug_grad', 'debug_ugrad'],
+        # 파티션마다 물어볼 노드 후보 수. 노드별로 시작 시각이 크게 다를 수 있다
+        # (실측 3일 차이). 질의는 싸다 — 5회에 1초 미만.
+        'probe_nodes': 5,
+        # 고성능 노드(m/k/n)는 귀한 자원이다. 일반 GPU 보다 이만큼(초) 이상
+        # 빨리 시작할 때만 추천한다. 1분 빠르다고 고성능을 쓰라고 하면 안 된다.
+        'high_perf_gain_seconds': 1800,     # 30분
+    },
     # 서버가 강제하지 않는 "권장" 정책. 가이드 기준. 넘으면 경고(차단은 아님).
     'policy': {
         'walltime_max_days': 6,       # 상향 신청 시 최대
@@ -103,6 +116,20 @@ class Config:
     @property
     def policy(self):
         return self._data['policy']
+
+    @property
+    def excluded_partitions(self):
+        """학습 추천에서 뺄 파티션 (debug_* 등)."""
+        return list(self._data['placement']['exclude_partitions'])
+
+    @property
+    def probe_nodes(self):
+        return int(self._data['placement']['probe_nodes'])
+
+    @property
+    def high_perf_gain_seconds(self):
+        """고성능 노드를 추천하려면 이만큼은 빨라야 한다."""
+        return int(self._data['placement']['high_perf_gain_seconds'])
 
     @property
     def blocked_paths(self):

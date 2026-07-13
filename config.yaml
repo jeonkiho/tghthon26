@@ -16,6 +16,15 @@ cluster:
   # 학부생이 실제로 쓸 수 있는 노드 (서버에서 확인, 가이드의 ariel-v[6-12])
   undergrad_nodes: [ariel-v6, ariel-v7, ariel-v8, ariel-v9, ariel-v10, ariel-v11, ariel-v12]
 
+# "지금 어디에 학습을 올려야 제일 빨리 시작하나" 추천 설정
+placement:
+  # 학습 추천에서 제외할 파티션.
+  # debug_* 는 디버깅·짧은 테스트용이다(4시간 제한). "지금 바로 시작된다"는 이유로
+  # 학습을 여기로 몰면, 정작 디버깅하려는 사람이 못 쓴다.
+  exclude_partitions: [debug_grad, debug_ugrad]
+  # 파티션마다 Slurm 에 물어볼 노드 후보 수. 노드별 시작 시각이 크게 다를 수 있다.
+  probe_nodes: 5
+
 # 세라프 운영 "권장" 정책 (서버가 강제하지 않음). 출처: KHU GPU Cluster User Guide.
 # 넘으면 경고만 하고 막지는 않는다. 학기마다 바뀔 수 있으니 가이드로 재확인할 것.
 policy:

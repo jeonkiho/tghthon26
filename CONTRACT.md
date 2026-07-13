@@ -93,16 +93,16 @@ r = placement.find_fastest(conn, snap, gpus=1, hours=2)
 
 ```json
 {
-  "can_start_now": true,
-  "headline": "지금 바로 시작할 수 있습니다 → debug_grad / ariel-v4 (최대 4시간 제한)",
+  "can_start_now": false,
+  "headline": "지금 바로는 어렵습니다. 가장 빨리 시작하는 곳은 batch_grad / ariel-v7 (GPU) — 약 4시간 11분 뒤입니다.",
   "best": {
-    "partition": "debug_grad", "node": "ariel-v4",
-    "start": "2026-07-13T17:18:26",
-    "wait_seconds": 0, "wait_text": "지금 바로", "starts_now": true,
-    "time_limit_seconds": 14400,
-    "script": "#!/bin/bash\n#SBATCH --partition=debug_grad\n..."
+    "partition": "batch_grad", "node": "ariel-v7", "high_perf": false,
+    "start": "2026-07-13T21:30:00",
+    "wait_seconds": 15060, "wait_text": "약 4시간 11분 뒤", "starts_now": false,
+    "time_limit_seconds": null,
+    "script": "#!/bin/bash\n#SBATCH --partition=batch_grad\n..."
   },
-  "options": [ {...best...}, {"partition": "batch_grad", "wait_text": "약 3시간 9분 뒤", ...} ],
+  "options": [ {...일반...}, {"high_perf": true, "node": "ariel-n1", ...} ],
   "blocked": [ {"partition": "...", "reason": "..."} ],
   "requested": {"gpus": 1, "hours": 2, "high_perf": false}
 }
@@ -110,11 +110,21 @@ r = placement.find_fastest(conn, snap, gpus=1, hours=2)
 
 - `headline` 은 완성된 한 문장이다. **화면에 그대로 크게 띄우면 된다.**
 - `can_start_now` 로 색을 정한다 (초록=지금 가능, 노랑=기다려야 함).
-- `options` 는 **빠른 순 정렬**. 각 항목에 `wait_text`(사람이 읽는 대기시간)와
-  `time_limit_seconds`(그 파티션 시간 제한)가 있다.
-- `best.script` 는 **바로 제출할 수 있는 sbatch 스크립트**다. 사용자가 확인 후
-  제출하면 된다.
+- `options` 는 **빠른 순 정렬**. `high_perf` 로 일반/고성능을 구분해 표시하면 된다.
+- `best.script` 는 **바로 제출할 수 있는 sbatch 스크립트**다. 지금 못 시작해도
+  올려두면 그 시각에 시작한다 — 사용자가 확인 후 제출하면 된다.
 - `blocked` 는 아예 못 내는 후보와 이유 (계정 불일치, QOS 한도 등).
+
+### 두 가지 정책이 들어 있다
+
+**① `debug_*` 는 학습 추천에서 뺀다.** 거긴 디버깅·짧은 테스트용이다(4시간 제한).
+"지금 바로 시작된다"는 이유로 학습을 debug 로 몰면 정작 디버깅하려는 사람이 못 쓴다.
+`config.yaml` 의 `placement.exclude_partitions` 로 조정 가능.
+
+**② 고성능 GPU 는 "의미 있게" 빠를 때만 추천한다.** 일반 GPU 만 요청해도 QOS 가
+허용하면 고성능도 함께 물어보지만, 30분 이상 빨라야 `best` 로 고른다(귀한 자원을
+1분 아끼자고 쓰면 안 된다). 사용자가 `high_perf=True` 로 직접 요구하면 존중한다.
+기준값은 `placement.high_perf_gain_seconds`.
 
 ### ⚠️ 왜 이게 필요한가 — `free_gpus` 로는 알 수 없다
 
