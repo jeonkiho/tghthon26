@@ -1,0 +1,28 @@
+358283|bash|FAILED|127:0|2026-06-26T20:44:25|2026-06-26T20:46:52|00:02:27|02:00:00|debug_grad|ariel-g1|billing=8,cpu=8,gres/gpu=1,mem=32G,node=1|32G|
+358283.extern|extern|COMPLETED|0:0|2026-06-26T20:44:25|2026-06-26T20:46:52|00:02:27|||ariel-g1|billing=8,cpu=8,gres/gpu=1,mem=32G,node=1||0
+358283.0|bash|FAILED|127:0|2026-06-26T20:44:25|2026-06-26T20:46:52|00:02:27|||ariel-g1|cpu=8,gres/gpu=1,mem=32G,node=1||1812K
+358284|bash|COMPLETED|0:0|2026-06-26T20:46:59|2026-06-26T20:49:13|00:02:14|02:00:00|debug_grad|ariel-g3|billing=8,cpu=8,gres/gpu=1,mem=32G,node=1|32G|
+358284.extern|extern|COMPLETED|0:0|2026-06-26T20:46:59|2026-06-26T20:49:13|00:02:14|||ariel-g3|billing=8,cpu=8,gres/gpu=1,mem=32G,node=1||0
+358284.0|bash|COMPLETED|0:0|2026-06-26T20:46:59|2026-06-26T20:49:13|00:02:14|||ariel-g3|cpu=8,gres/gpu=1,mem=32G,node=1||1596K
+358285|bash|CANCELLED by 20301|0:0|None|2026-06-26T20:51:21|00:00:00|02:00:00|debug_grad|None assigned||32G|
+358286|bash|COMPLETED|0:0|2026-06-26T20:51:24|2026-06-26T20:51:55|00:00:31|02:00:00|debug_grad|ariel-k2|billing=8,cpu=8,gres/gpu:high_perf=1,gres/gpu=1,mem=32G,node=1|32G|
+358286.extern|extern|COMPLETED|0:0|2026-06-26T20:51:24|2026-06-26T20:51:55|00:00:31|||ariel-k2|billing=8,cpu=8,gres/gpu:high_perf=1,gres/gpu=1,mem=32G,node=1||0
+358286.0|bash|COMPLETED|0:0|2026-06-26T20:51:24|2026-06-26T20:51:55|00:00:31|||ariel-k2|cpu=8,gres/gpu:high_perf=1,gres/gpu=1,mem=32G,node=1||1356K
+358643|gr00t_libero|FAILED|0:53|2026-06-29T12:23:31|2026-06-29T12:23:32|00:00:01|1-00:00:00|batch_grad|ariel-g1|billing=16,cpu=16,gres/gpu=2,mem=64G,node=1|64G|
+358643.batch|batch|CANCELLED|0:53|2026-06-29T12:23:31|2026-06-29T12:23:32|00:00:01|||ariel-g1|cpu=16,gres/gpu=2,mem=64G,node=1||
+358643.extern|extern|COMPLETED|0:0|2026-06-29T12:23:31|2026-06-29T12:23:32|00:00:01|||ariel-g1|billing=16,cpu=16,gres/gpu=2,mem=64G,node=1||0
+358792|gr00t_libero|CANCELLED by 20301|0:0|2026-06-29T20:40:33|2026-06-29T20:57:52|00:17:19|1-00:00:00|batch_grad|ariel-g1|billing=16,cpu=16,gres/gpu=2,mem=64G,node=1|64G|
+358792.batch|batch|FAILED|1:0|2026-06-29T20:40:33|2026-06-29T20:57:54|00:17:21|||ariel-g1|cpu=16,gres/gpu=2,mem=64G,node=1||55558724K
+358792.extern|extern|COMPLETED|0:0|2026-06-29T20:40:33|2026-06-29T20:57:52|00:17:19|||ariel-g1|billing=16,cpu=16,gres/gpu=2,mem=64G,node=1||176K
+358796|gr00t_libero|OUT_OF_MEMORY|0:125|2026-06-29T21:02:00|2026-06-29T21:39:58|00:37:58|1-00:00:00|batch_grad|ariel-g1|billing=16,cpu=16,gres/gpu=2,mem=64G,node=1|64G|
+358796.batch|batch|OUT_OF_MEMORY|0:125|2026-06-29T21:02:00|2026-06-29T21:39:58|00:37:58|||ariel-g1|cpu=16,gres/gpu=2,mem=64G,node=1||61144768K
+358796.extern|extern|OUT_OF_MEMORY|0:125|2026-06-29T21:02:00|2026-06-29T21:39:58|00:37:58|||ariel-g1|billing=16,cpu=16,gres/gpu=2,mem=64G,node=1||0
+358825|gr00t_libero|OUT_OF_MEMORY|0:125|2026-06-29T23:29:21|2026-06-30T02:46:17|03:16:56|2-00:00:00|batch_grad|ariel-g5|billing=32,cpu=32,gres/gpu=4,mem=128G,node=1|128G|
+358825.batch|batch|OUT_OF_MEMORY|0:125|2026-06-29T23:29:21|2026-06-30T02:46:17|03:16:56|||ariel-g5|cpu=32,gres/gpu=4,mem=128G,node=1||127311468K
+358825.extern|extern|OUT_OF_MEMORY|0:125|2026-06-29T23:29:21|2026-06-30T02:46:17|03:16:56|||ariel-g5|billing=32,cpu=32,gres/gpu=4,mem=128G,node=1||1392K
+359060|bash|TIMEOUT|0:0|2026-06-30T14:23:34|2026-06-30T16:24:02|02:00:28|02:00:00|debug_grad|ariel-g5|billing=8,cpu=8,gres/gpu=1,mem=32G,node=1|32G|
+359060.extern|extern|COMPLETED|0:0|2026-06-30T14:23:34|2026-06-30T16:24:02|02:00:28|||ariel-g5|billing=8,cpu=8,gres/gpu=1,mem=32G,node=1||21676K
+359060.0|bash|CANCELLED|0:9|2026-06-30T14:23:34|2026-06-30T16:24:32|02:00:58|||ariel-g5|cpu=8,gres/gpu=1,mem=32G,node=1||7322552K
+359153|bash|TIMEOUT|0:0|2026-06-30T17:10:58|2026-06-30T19:11:03|02:00:05|02:00:00|debug_grad|ariel-n1|billing=8,cpu=8,gres/gpu:high_perf=1,gres/gpu=1,mem=32G,node=1|32G|
+359153.extern|extern|COMPLETED|0:0|2026-06-30T17:10:58|2026-06-30T19:11:03|02:00:05|||ariel-n1|billing=8,cpu=8,gres/gpu:high_perf=1,gres/gpu=1,mem=32G,node=1||0
+359153.0|bash|CANCELLED|0:9|2026-06-30T17:10:59|2026-06-30T19:11:33|02:00:34|||ariel-n1|cpu=8,gres/gpu:high_perf=1,gres/gpu=1,mem=32G,node=1||1892K

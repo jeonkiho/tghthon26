@@ -1,0 +1,9 @@
+compute-account|compute accounts
+grad|grad
+grad_ce|grad_ce
+grad_eebme|grad_eebme
+root|default root account
+ugrad|ugrad
+ugrad_advisor_x|advisor managed moana ugrad gpu
+ugrad_ce|ugrad_ce
+ugrad_eebme|ugrad_eebme

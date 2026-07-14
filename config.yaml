@@ -1,0 +1,72 @@
+# 세라프 TUI 설정. 코드를 고치지 않고 여기만 바꾼다.
+#
+# mode 를 바꾸면 접속 대상이 바뀐다:
+#   mock   - tests/fixtures 의 저장된 출력을 읽는다. 서버 불필요. (기본값)
+#   ssh    - 실제 세라프에 접속한다.
+
+connection:
+  mode: mock
+  host: ariel               # ~/.ssh/config 의 Host 이름을 그대로 쓴다
+  poll_interval_seconds: 7  # 5~10초. 이보다 자주 부르지 않는다
+  login_node_load_limit: 8.0  # 1분 load 가 이 이상이면 폴링을 쉰다
+
+cluster:
+  default_partition: batch_grad       # 대학원생 기본 파티션
+  undergrad_partition: batch_ugrad    # 학부생 기본 파티션
+  # 학부생이 실제로 쓸 수 있는 노드 (서버에서 확인, 가이드의 ariel-v[6-12])
+  undergrad_nodes: [ariel-v6, ariel-v7, ariel-v8, ariel-v9, ariel-v10, ariel-v11, ariel-v12]
+
+# "지금 어디에 학습을 올려야 제일 빨리 시작하나" 추천 설정
+placement:
+  # 학습 추천에서 제외할 파티션.
+  # debug_* 는 디버깅·짧은 테스트용이다(4시간 제한). "지금 바로 시작된다"는 이유로
+  # 학습을 여기로 몰면, 정작 디버깅하려는 사람이 못 쓴다.
+  exclude_partitions: [debug_grad, debug_ugrad]
+  # 파티션마다 Slurm 에 물어볼 노드 후보 수. 노드별 시작 시각이 크게 다를 수 있다.
+  probe_nodes: 5
+  # 고성능 노드(m/k/n)는 따로 신청한 사람만 쓴다. 자동 추천하지 않는다.
+  # (사용자가 명시적으로 요청할 때만 사용)
+
+# 세라프 운영 "권장" 정책 (서버가 강제하지 않음). 출처: KHU GPU Cluster User Guide.
+# 넘으면 경고만 하고 막지는 않는다. 학기마다 바뀔 수 있으니 가이드로 재확인할 것.
+policy:
+  walltime_max_days: 6
+  grad_gpu_default: 4
+  grad_gpu_max: 16
+  undergrad_gpu_default: 1
+  undergrad_gpu_max: 16
+
+lint:
+  # 학습 데이터를 여기서 바로 읽으면 안 된다. 노드 로컬로 복사해서 쓴다.
+  # 실제 마운트 지점을 확인해서 적은 것이다 (`/nas` 는 존재하지 않는다).
+  #
+  # 주의: 아래 정책은 세라프 운영 규칙을 그대로 옮긴 것이 아니라 팀이 정한 값이다.
+  # 조교/관리자에게 확인한 뒤 확정할 것.
+  blocked_paths:
+    - /nas2/
+  warn_paths:
+    - /ceph_data/   # 공유 스토리지. 대용량 반복 읽기는 피한다
+    - /home/        # 루트 파일시스템(96% 사용 중)에 있다. 학습 데이터용이 아니다
+
+sbatch:
+  # generate_sbatch() 기본값
+  default_cpus_per_task: 8
+  default_mem: 32G
+  default_time: "24:00:00"
+  output_pattern: "slurm-%j.out"   # %j = job id
+
+slack:
+  # TUI 에서 보여줄 Slack 공지 채널. 이름(#없이) 또는 채널 ID.
+  channel: 공지
+  limit: 10
+
+  # 토큰은 여기 적지 않는다. 이 파일은 커밋되기 때문이다.
+  # 환경변수로만 받는다:
+  #   export SERAPH_SLACK_TOKEN='xoxb-...'
+  # 없으면 저장된 mock 공지를 보여준다 (프론트 개발용).
+
+notify:
+  # (읽기가 아니라 보내는 쪽. 지금은 쓰지 않는다.)
+  # Slack Incoming Webhook URL. 비워두면 알림을 보내지 않는다.
+  # 환경변수 SERAPH_SLACK_WEBHOOK 이 있으면 그쪽이 우선한다.
+  slack_webhook_url: null

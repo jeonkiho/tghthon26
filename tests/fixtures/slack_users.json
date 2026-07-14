@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "members": [
+    {"id": "U01ADMIN", "name": "seraph.admin",
+     "profile": {"display_name": "세라프 관리자", "real_name": "김관리"}},
+    {"id": "U02TA", "name": "ta.lee",
+     "profile": {"display_name": "", "real_name": "이조교"}},
+    {"id": "U09NEW", "name": "newbie",
+     "profile": {"display_name": "새내기", "real_name": "박신입"}}
+  ]
+}
