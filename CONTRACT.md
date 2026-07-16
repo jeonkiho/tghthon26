@@ -445,7 +445,7 @@ true` 로 알려준다. 사용자가 노드를 직접 고르게 하려면
       "id": "ssh",
       "title": "SSH 로 세라프에 접속하기",
       "body": "...",
-      "commands": ["ssh ariel"],
+      "commands": ["ssh -p 30080 <사용자명>@ariel.khu.ac.kr"],
       "pitfall": "VSCode 의 Remote-SSH 로 붙는 것은 권장되지 않습니다...",
       "check": null
     }
@@ -619,14 +619,18 @@ webhook URL 은 `SERAPH_SLACK_WEBHOOK` 환경변수로 준다(읽기용 토큰�
 ```yaml
 connection:
   mode: mock              # mock | ssh   <- 이거 하나로 서버/가짜를 바꾼다
-  host: ariel
+  host: ariel.khu.ac.kr
+  port: 30080             # 교내는 22
   poll_interval_seconds: 7
   login_node_load_limit: 8.0
 cluster:
   default_partition: batch_grad
 lint:
-  blocked_paths: ["/nas2/"]
-  warn_paths: ["/ceph_data/", "/home/"]
+  blocked_paths: ["/data/"]
+  warn_paths: ["/home/"]
+storage:
+  data_root: /data
+  local_datasets_root: /local_datasets
 ```
 
 `python -m seraph.dump --section config` 로 현재 값을 확인할 수 있다.

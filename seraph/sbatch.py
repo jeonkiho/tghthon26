@@ -57,18 +57,20 @@ def pick_standard_node(snapshot, partition, gpus):
 
 
 def _sbatch_lines(*, name, partition, gpus, high_perf, cpus, mem, time_limit,
-                  node, output):
+                  node, output, error=None):
     gres = f'gpu:{HIGH_PERF}:{gpus}' if high_perf else f'gpu:{gpus}'
     lines = [
-        '#!/bin/bash',
+        '#!/usr/bin/bash',
         f'#SBATCH --job-name={name}',
         f'#SBATCH --partition={partition}',
         f'#SBATCH --gres={gres}',
-        f'#SBATCH --cpus-per-task={cpus}',
-        f'#SBATCH --mem={mem}',
+        f'#SBATCH --cpus-per-gpu={cpus}',
+        f'#SBATCH --mem-per-gpu={mem}',
         f'#SBATCH --time={time_limit}',
         f'#SBATCH --output={output}',
     ]
+    if error:
+        lines.append(f'#SBATCH --error={error}')
     if node:
         # 노드는 항상 하나만. 여러 개 적으면 전부 확보될 때까지 기다린다.
         lines.append(f'#SBATCH --nodelist={node}')
@@ -77,7 +79,7 @@ def _sbatch_lines(*, name, partition, gpus, high_perf, cpus, mem, time_limit,
 
 def generate_sbatch(snapshot, *, name, command, partition=None, gpus=1,
                     high_perf=False, cpus=None, mem=None, time_limit=None,
-                    node=None, paths=()):
+                    node=None, paths=(), output=None, error=None):
     """제출용 sbatch 스크립트를 만든다.
 
     일반 GPU 인데 node 를 안 넘기면 v/g 노드를 하나 자동으로 고른다. 세라프가
@@ -90,10 +92,10 @@ def generate_sbatch(snapshot, *, name, command, partition=None, gpus=1,
     cfg = snapshot.config
     defaults = cfg.sbatch
     partition = partition or cfg.default_partition
-    cpus = cpus if cpus is not None else defaults['default_cpus_per_task']
-    mem = mem or defaults['default_mem']
+    cpus = cpus if cpus is not None else defaults['default_cpus_per_gpu']
+    mem = mem or defaults['default_mem_per_gpu']
     time_limit = time_limit or defaults['default_time']
-    output = defaults['output_pattern']
+    output = output or defaults['output_pattern']
 
     auto_selected = False
     if not high_perf and not node:
@@ -135,6 +137,7 @@ def generate_sbatch(snapshot, *, name, command, partition=None, gpus=1,
     lines = _sbatch_lines(
         name=name, partition=partition, gpus=gpus, high_perf=high_perf,
         cpus=cpus, mem=mem, time_limit=time_limit, node=node, output=output,
+        error=error,
     )
     return {
         'ok': True,

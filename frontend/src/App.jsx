@@ -1,0 +1,342 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+const ACTIVE = new Set(["SUBMITTED", "SUBMITTING", "PENDING", "RUNNING", "COMPLETING", "CANCEL_REQUESTED"]);
+const DASHBOARD_POLL_MS = 60_000;
+const ACTIVE_JOB_POLL_MS = 20_000;
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data?.error?.message || "요청을 처리하지 못했습니다.");
+    error.code = data?.error?.code || "REQUEST_FAILED";
+    error.retryable = Boolean(data?.error?.retryable);
+    throw error;
+  }
+  return data;
+}
+
+function Icon({ name, size = 20 }) {
+  const paths = {
+    grid: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
+    plus: <><path d="M12 5v14M5 12h14"/></>,
+    jobs: <><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M8 5V3m8 2V3M3 10h18M8 15h3"/></>,
+    gpu: <><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h6v4H7zm10-1v6M6 3v3m4-3v3m4-3v3m4-3v3M6 18v3m4-3v3m4-3v3m4-3v3"/></>,
+    refresh: <><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></>,
+    arrow: <><path d="m9 18 6-6-6-6"/></>,
+    check: <><path d="m5 12 4 4L19 6"/></>,
+    copy: <><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></>,
+    folder: <><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></>,
+    terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></>,
+    spark: <><path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6zM19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/></>,
+    close: <><path d="m6 6 12 12M18 6 6 18"/></>,
+    server: <><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></>,
+  };
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
+function StatusPill({ status }) {
+  const key = (status || "UNKNOWN").toUpperCase();
+  const labels = {
+    STAGED: "준비 완료", SUBMITTING: "제출 중", SUBMITTED: "제출됨", PENDING: "대기 중",
+    RUNNING: "실행 중", COMPLETING: "정리 중", COMPLETED: "완료", FAILED: "실패",
+    CANCELLED: "취소됨", CANCEL_REQUESTED: "취소 요청", TIMEOUT: "시간 초과", OUT_OF_MEMORY: "메모리 부족",
+  };
+  return <span className={`status status-${key.toLowerCase()}`}><i />{labels[key] || key}</span>;
+}
+
+function Metric({ icon, label, value, detail, accent }) {
+  return <article className="metric-card">
+    <div className={`metric-icon ${accent || ""}`}><Icon name={icon} /></div>
+    <div><p>{label}</p><strong>{value ?? "—"}</strong><span>{detail}</span></div>
+  </article>;
+}
+
+function ErrorToast({ error, onClose }) {
+  if (!error) return null;
+  return <div className="toast" role="alert">
+    <div><strong>{error.code || "오류"}</strong><p>{error.message}</p></div>
+    <button onClick={onClose} aria-label="닫기"><Icon name="close" size={18}/></button>
+  </div>;
+}
+
+const blankForm = {
+  name: "image-train", local_code_path: "", entrypoint: "train.py", argsText: "--data\n{dataset}\n--output\n{output}",
+  dataset_path: "/data/datasets/tarfiles/images.tar.gz", output_path: "/data/사용자명/results/image-train",
+  copy_dataset_to_local: true, partition: "", gpus: 1, high_perf: false, cpus: 8, memory: "32G",
+  time_limit: "02:00:00", node: "", conda_env: "",
+};
+
+export default function App() {
+  const [tab, setTab] = useState("dashboard");
+  const [health, setHealth] = useState(null);
+  const [me, setMe] = useState(null);
+  const [cluster, setCluster] = useState(null);
+  const [usage, setUsage] = useState(null);
+  const [nodes, setNodes] = useState([]);
+  const [partitions, setPartitions] = useState({});
+  const [diagnosis, setDiagnosis] = useState(null);
+  const [jobs, setJobs] = useState([]);
+  const [form, setForm] = useState(blankForm);
+  const [recommendation, setRecommendation] = useState(null);
+  const [validation, setValidation] = useState(null);
+  const [prepared, setPrepared] = useState(null);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [logs, setLogs] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [password, setPassword] = useState("");
+  const [sshUsername, setSshUsername] = useState("");
+  const [sshHost, setSshHost] = useState("");
+  const [sshPort, setSshPort] = useState("");
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
+
+  const report = useCallback((err) => setError({ code: err.code, message: err.message }), []);
+
+  const loadDashboard = useCallback(async () => {
+    try {
+      const [meData, statusData, usageData, nodeData, partitionData, diagnosisData] = await Promise.all([
+        api("/api/v1/me"), api("/api/v1/cluster/status"), api("/api/v1/cluster/usage"),
+        api("/api/v1/cluster/nodes?gpus=1"), api("/api/v1/cluster/partitions"), api("/api/v1/jobs/diagnosis"),
+      ]);
+      setMe(meData); setCluster(statusData); setUsage(usageData); setNodes(nodeData.nodes || []);
+      setPartitions(partitionData.partitions || {}); setDiagnosis(diagnosisData);
+      setForm((old) => ({
+        ...old,
+        partition: old.partition || meData.default_partition || "",
+        output_path: old.output_path === blankForm.output_path ? `/data/${meData.user}/results/${old.name}` : old.output_path,
+      }));
+    } catch (err) { report(err); }
+  }, [report]);
+
+  const loadJobs = useCallback(async () => {
+    try { const data = await api("/api/v1/jobs"); setJobs(data.jobs || []); }
+    catch (err) { report(err); }
+  }, [report]);
+
+  const initialize = useCallback(async () => {
+    try {
+      const data = await api("/api/v1/health"); setHealth(data);
+      setSshUsername((old) => old || data.ssh_username || "");
+      setSshHost((old) => old || data.ssh_host || "ariel.khu.ac.kr");
+      setSshPort((old) => old || String(data.ssh_port || 30080));
+      if (data.seraph_reachable) await Promise.all([loadDashboard(), loadJobs()]);
+    } catch (err) { report(err); }
+  }, [loadDashboard, loadJobs, report]);
+
+  useEffect(() => { initialize(); }, [initialize]);
+  useEffect(() => {
+    const onVisibilityChange = () => setPageVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+  useEffect(() => {
+    if (!health?.seraph_reachable || !pageVisible) return undefined;
+    // SFTP 작업 폴더 목록은 자동 탐색하지 않는다. 대시보드 Snapshot만 갱신한다.
+    const timer = window.setInterval(() => { loadDashboard(); }, DASHBOARD_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [health?.seraph_reachable, pageVisible, loadDashboard]);
+
+  const refreshJobStatus = useCallback(async (localId) => {
+    try {
+      const detail = await api(`/api/v1/jobs/${localId}`);
+      setSelected(detail);
+      setJobs((items) => items.map((item) => item.local_job_id === localId ? detail.job : item));
+    } catch (err) { report(err); }
+  }, [report]);
+
+  const refreshJobLogs = useCallback(async (localId) => {
+    try { setLogs(await api(`/api/v1/jobs/${localId}/logs`)); }
+    catch (err) { report(err); }
+  }, [report]);
+
+  const openJob = useCallback(async (localId) => {
+    try {
+      const [detail, logData] = await Promise.all([
+        api(`/api/v1/jobs/${localId}`), api(`/api/v1/jobs/${localId}/logs`),
+      ]);
+      setSelected(detail); setLogs(logData);
+      setJobs((items) => items.map((item) => item.local_job_id === localId ? detail.job : item));
+    } catch (err) { report(err); }
+  }, [report]);
+
+  useEffect(() => {
+    const id = selected?.job?.local_job_id;
+    if (!id || !pageVisible || !ACTIVE.has(selected.job.status)) return undefined;
+    // 실행 상태만 낮은 빈도로 확인한다. 로그 SFTP 읽기는 사용자가 요청할 때만 한다.
+    const timer = window.setInterval(() => refreshJobStatus(id), ACTIVE_JOB_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [selected?.job?.local_job_id, selected?.job?.status, pageVisible, refreshJobStatus]);
+
+  const payload = useMemo(() => ({
+    name: form.name, local_code_path: form.local_code_path, entrypoint: form.entrypoint,
+    arguments: form.argsText.split("\n").map((item) => item.trim()).filter(Boolean),
+    dataset_path: form.dataset_path, output_path: form.output_path,
+    copy_dataset_to_local: form.copy_dataset_to_local, partition: form.partition || null,
+    gpus: Number(form.gpus), high_perf: form.high_perf, cpus: Number(form.cpus), memory: form.memory,
+    time_limit: form.time_limit, node: form.node || null, conda_env: form.conda_env || null,
+  }), [form]);
+
+  const runAction = async (action) => {
+    setLoading(true); setError(null);
+    try { await action(); } catch (err) { report(err); } finally { setLoading(false); }
+  };
+
+  const chooseCode = (kind) => runAction(async () => {
+    const data = await api(`/api/v1/local/select-code?kind=${kind}`, { method: "POST" });
+    if (data.path) setForm((old) => ({ ...old, local_code_path: data.path }));
+  });
+
+  const recommend = () => runAction(async () => {
+    const [hours, minutes] = form.time_limit.split(":").map(Number);
+    const data = await api("/api/v1/recommendations", {
+      method: "POST", body: JSON.stringify({ gpus: Number(form.gpus), hours: hours + minutes / 60, high_perf: form.high_perf, node: null }),
+    });
+    setRecommendation(data);
+    if (data.best) setForm((old) => ({ ...old, partition: data.best.partition, node: data.best.node || "" }));
+  });
+
+  const validate = () => runAction(async () => {
+    const data = await api("/api/v1/jobs/validate", { method: "POST", body: JSON.stringify(payload) });
+    setValidation(data); setPrepared(null);
+  });
+
+  const prepare = () => runAction(async () => {
+    const checked = await api("/api/v1/jobs/validate", { method: "POST", body: JSON.stringify(payload) });
+    setValidation(checked);
+    if (!checked.ok) return;
+    const data = await api("/api/v1/jobs/prepare", { method: "POST", body: JSON.stringify(payload) });
+    setPrepared(data); setConfirmSubmit(false); await loadJobs();
+  });
+
+  const submit = () => runAction(async () => {
+    if (!confirmSubmit || !prepared) return;
+    const requestId = globalThis.crypto?.randomUUID?.() || `request-${Date.now()}`;
+    const data = await api(`/api/v1/jobs/${prepared.job.local_job_id}/submit`, {
+      method: "POST", body: JSON.stringify({ request_id: requestId, confirmed: true }),
+    });
+    setPrepared((old) => ({ ...old, job: data.job })); await loadJobs(); await openJob(data.job.local_job_id); setTab("jobs");
+  });
+
+  const preflight = () => runAction(async () => {
+    if (!prepared) return;
+    const data = await api(`/api/v1/jobs/${prepared.job.local_job_id}/preflight`, { method: "POST" });
+    setPrepared((old) => ({ ...old, job: data.job, preflight: data.preflight }));
+  });
+
+  const cancel = (localId) => runAction(async () => {
+    if (!window.confirm("이 Slurm 작업을 취소할까요?")) return;
+    await api(`/api/v1/jobs/${localId}/cancel`, { method: "POST" }); await openJob(localId); await loadJobs();
+  });
+
+  const connect = () => runAction(async () => {
+    await api("/api/v1/session/connect", {
+      method: "POST",
+      body: JSON.stringify({
+        username: sshUsername || null,
+        host: sshHost || null,
+        port: sshPort ? Number(sshPort) : null,
+        password: password || null,
+      }),
+    });
+    setPassword(""); await initialize();
+  });
+
+  const refreshAll = () => runAction(async () => {
+    await api("/api/v1/cluster/refresh", { method: "POST" }); await Promise.all([loadDashboard(), loadJobs()]);
+  });
+
+  const nav = [
+    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"],
+  ];
+  const visibleNodes = cluster?.nodes?.slice(0, 8) || nodes.slice(0, 8);
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="brand"><div className="brand-mark"><span /><span /><span /></div><div><strong>SERAPH</strong><small>GPU CONSOLE</small></div></div>
+      <nav>{nav.map(([key, icon, label]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon name={icon}/><span>{label}</span>{key === "jobs" && jobs.length > 0 && <b>{jobs.length}</b>}</button>)}</nav>
+      <div className="side-note"><Icon name="server"/><div><strong>{health?.mode === "ssh" ? "SERAPH 연결" : "Mock 시연 모드"}</strong><span>{health?.seraph_reachable ? "정상 연결됨" : "연결 필요"}</span></div><i className={health?.seraph_reachable ? "online" : ""}/></div>
+      <p className="version">Local console · v1.1.1</p>
+    </aside>
+
+    <main>
+      <header>
+        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : "내 작업"}</h1></div>
+        <div className="header-actions"><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading}><Icon name="refresh"/></button></div>
+      </header>
+
+      {tab === "dashboard" && <section className="page dashboard-page">
+        <div className="welcome-strip"><div><span className="live-dot"/>LIVE · {cluster?.partition || me?.default_partition || "SERAPH"}</div><p>{diagnosis?.headline || "GPU 현황과 내 작업 상태를 불러오는 중입니다."}</p><button onClick={() => setTab("new")}>새 작업 만들기 <Icon name="arrow" size={16}/></button></div>
+        <div className="metrics">
+          <Metric icon="gpu" label="사용 가능한 GPU" value={cluster?.free_gpus} detail={`전체 ${cluster?.total_gpus ?? "—"}개`} accent="mint"/>
+          <Metric icon="server" label="GPU 사용률" value={cluster ? `${Math.round(cluster.utilization * 100)}%` : null} detail={`${cluster?.used_gpus ?? "—"}개 사용 중`} accent="blue"/>
+          <Metric icon="jobs" label="실행 중인 작업" value={cluster?.running_jobs} detail={`대기 ${cluster?.pending_jobs ?? "—"}개`} accent="violet"/>
+          <Metric icon="spark" label="내 GPU 사용" value={usage ? `${usage.gpus_in_use}/${usage.gpus_limit ?? "∞"}` : null} detail={`${usage?.pending_jobs ?? "—"}개 대기`} accent="amber"/>
+        </div>
+        <div className="dashboard-grid">
+          <article className="panel resource-panel"><div className="panel-head"><div><p className="eyebrow">RESOURCE MAP</p><h2>노드 가용 현황</h2></div><span>사용 가능 GPU 기준</span></div>
+            <div className="node-table"><div className="node-row node-header"><span>노드</span><span>유형</span><span>상태</span><span>사용 가능</span><span>GPU</span></div>{visibleNodes.map((node) => <div className="node-row" key={node.name}><strong>{node.name}</strong><span>{node.is_high_perf ? "고성능" : "일반"}</span><span className={node.schedulable ? "node-ok" : "node-off"}>{node.schedulable ? "사용 가능" : node.state}</span><span>{node.usable_gpus} / {node.total_gpus}</span><div className="mini-bar"><i style={{ width: `${node.total_gpus ? node.usable_gpus / node.total_gpus * 100 : 0}%` }}/></div></div>)}</div>
+          </article>
+          <article className="panel quick-panel"><div className="panel-head"><div><p className="eyebrow">QUICK START</p><h2>빠른 실행 추천</h2></div><div className="spark-badge"><Icon name="spark" size={17}/></div></div>
+            <p className="muted">Slurm의 실제 스케줄러에 물어보고 가장 빠른 파티션과 노드를 찾습니다.</p>
+            <div className="quick-controls"><label>GPU 수<select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value})}>{[1,2,4,8,16].map(n => <option key={n}>{n}</option>)}</select></label><label>예상 시간<input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></label></div>
+            <button className="primary full" onClick={recommend} disabled={loading}><Icon name="spark" size={18}/> 가장 빠른 위치 찾기</button>
+            {recommendation && <div className={`recommend-box ${recommendation.can_start_now ? "now" : "wait"}`}><span>{recommendation.can_start_now ? "지금 실행 가능" : "추천 위치"}</span><strong>{recommendation.best ? `${recommendation.best.partition} · ${recommendation.best.node}` : "조건에 맞는 위치 없음"}</strong><p>{recommendation.headline}</p></div>}
+          </article>
+        </div>
+        <article className="panel recent-panel"><div className="panel-head"><div><p className="eyebrow">RECENT JOBS</p><h2>최근 작업</h2></div><button className="text-button" onClick={() => setTab("jobs")}>전체 보기 <Icon name="arrow" size={15}/></button></div><JobTable jobs={jobs.slice(0, 5)} onOpen={(id) => {openJob(id); setTab("jobs");}}/></article>
+      </section>}
+
+      {tab === "new" && <section className="page new-page">
+        <div className="wizard-layout"><div className="form-column">
+          <article className="panel form-panel"><SectionTitle number="01" title="코드와 실행" subtitle="제출 시점의 코드만 작업별 폴더에 한 번 업로드합니다."/>
+            <div className="field-grid"><Field label="작업 이름"><input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})}/></Field><Field label="진입 파일"><input value={form.entrypoint} onChange={(e) => setForm({...form, entrypoint: e.target.value})}/></Field></div>
+            <Field label="로컬 코드 경로" hint="코드 폴더, .py, .zip, .tar.gz"><div className="path-input"><input placeholder="예: C:\Users\me\project" value={form.local_code_path} onChange={(e) => setForm({...form, local_code_path: e.target.value})}/><button onClick={() => chooseCode("directory")}><Icon name="folder" size={17}/> 폴더</button><button onClick={() => chooseCode("file")}>파일</button></div></Field>
+            <Field label="실행 인자" hint="한 줄에 인자 하나 · {dataset}, {output} 사용 가능"><textarea rows="5" value={form.argsText} onChange={(e) => setForm({...form, argsText: e.target.value})}/></Field>
+            <Field label="Conda 환경 (선택)"><input placeholder="예: pytorch-2.6" value={form.conda_env} onChange={(e) => setForm({...form, conda_env: e.target.value})}/></Field>
+          </article>
+          <article className="panel form-panel"><SectionTitle number="02" title="데이터와 결과" subtitle="대용량 데이터는 업로드하지 않고 기존 NAS 경로를 사용합니다."/>
+            <Field label="NAS 데이터 경로"><input value={form.dataset_path} onChange={(e) => setForm({...form, dataset_path: e.target.value})}/></Field>
+            <label className="switch-row"><button type="button" className="switch on" disabled aria-label="GPU 노드 로컬 복사 필수"><i/></button><div><strong>/local_datasets로 복사·압축 해제</strong><span>튜토리얼 준수를 위해 항상 적용되며 끌 수 없습니다.</span></div></label>
+            <Field label="결과 저장 경로"><input value={form.output_path} onChange={(e) => setForm({...form, output_path: e.target.value})}/></Field>
+          </article>
+          <article className="panel form-panel"><SectionTitle number="03" title="GPU와 실행 조건" subtitle="추천 결과는 원본 SERAPH 코어의 sbatch --test-only를 사용합니다."/>
+            <div className="resource-grid"><Field label="GPU"><select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value})}>{[1,2,4,8,16].map(n => <option key={n}>{n}</option>)}</select></Field><Field label="GPU당 CPU"><input type="number" min="1" value={form.cpus} onChange={(e) => setForm({...form, cpus: e.target.value})}/></Field><Field label="GPU당 메모리"><input value={form.memory} onChange={(e) => setForm({...form, memory: e.target.value})}/></Field><Field label="시간 제한"><input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></Field></div>
+            <label className="check-row"><input type="checkbox" checked={form.high_perf} onChange={(e) => setForm({...form, high_perf: e.target.checked})}/><span><strong>고성능 GPU 요청</strong><small>별도 권한이 있는 사용자만 선택</small></span></label>
+            <div className="field-grid"><Field label="파티션"><select value={form.partition} onChange={(e) => setForm({...form, partition: e.target.value})}><option value="">자동 선택</option>{Object.entries(partitions).map(([name, item]) => <option key={name} value={name} disabled={!item.can_use}>{name}{!item.can_use ? " · 권한 없음" : ""}</option>)}</select></Field><Field label="노드 (선택)"><input placeholder="추천 시 자동 입력" value={form.node} onChange={(e) => setForm({...form, node: e.target.value})}/></Field></div>
+            <div className="button-row"><button className="secondary" onClick={recommend} disabled={loading}><Icon name="spark" size={18}/> 위치 추천</button><button className="secondary" onClick={validate} disabled={loading}><Icon name="check" size={18}/> 설정 검사</button><button className="primary" onClick={prepare} disabled={loading}>업로드하고 준비 <Icon name="arrow" size={17}/></button></div>
+          </article>
+        </div>
+        <aside className="review-column">
+          <article className="panel sticky-review"><p className="eyebrow">SUBMISSION REVIEW</p><h2>제출 준비 상태</h2>
+            {!validation && <div className="empty-review"><div><Icon name="check" size={26}/></div><strong>아직 검사하지 않았습니다</strong><p>코드와 경로, 자원 조건을 입력한 뒤 설정 검사를 실행하세요.</p></div>}
+            {validation && <><div className={`validation-head ${validation.ok ? "valid" : "invalid"}`}><Icon name={validation.ok ? "check" : "close"}/><div><strong>{validation.ok ? "검사 통과" : "수정이 필요합니다"}</strong><span>{validation.problems.length}개 안내</span></div></div><div className="problem-list">{validation.problems.length === 0 && <p className="all-clear">차단 또는 경고 항목이 없습니다.</p>}{validation.problems.map((item, index) => <div key={`${item.code}-${index}`} className={item.level}><b>{item.level === "block" ? "차단" : "경고"}</b><div><strong>{item.code}</strong><p>{item.message}</p></div></div>)}</div><dl className="review-data"><div><dt>파티션</dt><dd>{validation.resolved.partition}</dd></div><div><dt>노드</dt><dd>{validation.resolved.node || "자동"}</dd></div><div><dt>코드</dt><dd>{validation.code.display_name}</dd></div><div><dt>업로드</dt><dd>{formatBytes(validation.code.bytes)}</dd></div></dl></>}
+            {prepared && <div className="prepared-box"><div className="prepared-title"><span><Icon name="terminal" size={18}/></span><div><strong>스크립트 생성 완료</strong><small>{prepared.job.remote_dir}</small></div><button onClick={() => navigator.clipboard.writeText(prepared.script)} title="복사"><Icon name="copy" size={17}/></button></div><pre>{prepared.script}</pre><button className="secondary full preflight-button" disabled={loading || prepared.preflight?.ok || prepared.job.slurm_job_id} onClick={preflight}><Icon name="terminal" size={16}/>{prepared.preflight?.ok ? "srun 사전 점검 통과" : "srun 사전 점검 실행"}</button>{prepared.preflight && <pre className="preflight-output">{prepared.preflight.output}</pre>}<label className="final-confirm"><input type="checkbox" checked={confirmSubmit} disabled={!prepared.preflight?.ok} onChange={(e) => setConfirmSubmit(e.target.checked)}/><span>{prepared.preflight?.ok ? "srun 점검과 스크립트·경로 확인을 마쳤으며 실제 제출에 동의합니다." : "먼저 srun 사전 점검을 통과해야 최종 제출할 수 있습니다."}</span></label><button className="submit-button" disabled={!prepared.preflight?.ok || !confirmSubmit || loading || prepared.job.slurm_job_id} onClick={submit}>{prepared.job.slurm_job_id ? `제출됨 · ${prepared.job.slurm_job_id}` : "최종 제출"}<Icon name="arrow" size={17}/></button></div>}
+          </article>
+        </aside></div>
+      </section>}
+
+      {tab === "jobs" && <section className="page jobs-page">
+        <article className="panel jobs-panel"><div className="panel-head"><div><p className="eyebrow">SLURM JOBS</p><h2>작업별 실행 상태</h2></div><button className="secondary compact" onClick={loadJobs}><Icon name="refresh" size={16}/> 새로고침</button></div><JobTable jobs={jobs} onOpen={openJob}/></article>
+        {selected && <div className="job-drawer"><div className="drawer-head"><div><p className="eyebrow">JOB DETAIL</p><h2>{selected.job.job_name}</h2></div><button onClick={() => setSelected(null)}><Icon name="close"/></button></div><div className="drawer-status"><StatusPill status={selected.job.status}/><span>Slurm #{selected.job.slurm_job_id || "미제출"}</span></div><dl className="detail-grid"><div><dt>파티션</dt><dd>{selected.job.partition}</dd></div><div><dt>노드</dt><dd>{selected.job.node || "자동"}</dd></div><div><dt>GPU</dt><dd>{selected.job.gpus}개</dd></div><div><dt>시간 제한</dt><dd>{selected.job.time_limit}</dd></div><div className="wide"><dt>데이터</dt><dd>{selected.job.dataset_path}</dd></div><div className="wide"><dt>결과</dt><dd>{selected.job.output_path}</dd></div></dl><div className="log-tabs"><span><Icon name="terminal" size={17}/> stdout · 수동 갱신</span><div><button onClick={() => refreshJobLogs(selected.job.local_job_id)}><Icon name="refresh" size={15}/> 로그 갱신</button><button onClick={() => navigator.clipboard.writeText(logs?.stdout || "")}><Icon name="copy" size={15}/> 복사</button></div></div><pre className="logs">{logs?.stdout || "아직 출력 로그가 없습니다."}{logs?.stderr ? `\n\n[stderr]\n${logs.stderr}` : ""}</pre>{ACTIVE.has(selected.job.status) && selected.job.slurm_job_id && <button className="danger-button" onClick={() => cancel(selected.job.local_job_id)}>작업 취소</button>}</div>}
+      </section>}
+    </main>
+
+    {health && !health.seraph_reachable && <div className="connect-overlay"><div className="connect-card"><div className="connect-logo"><Icon name="server" size={30}/></div><p className="eyebrow">SERAPH CONNECTION</p><h2>서버 연결이 필요합니다</h2><p>입력한 사용자명은 SSH 로그인과 <code>/data/사용자명</code> 작업 경로에 사용합니다. 비밀번호는 저장하지 않습니다.</p>{health.mode === "ssh" && <><input autoComplete="username" placeholder="SERAPH 사용자명" value={sshUsername} onChange={(e) => setSshUsername(e.target.value)}/><div className="connect-endpoint"><input placeholder="호스트" value={sshHost} onChange={(e) => setSshHost(e.target.value)}/><input type="number" min="1" max="65535" placeholder="포트" value={sshPort} onChange={(e) => setSshPort(e.target.value)}/></div><input type="password" autoComplete="off" placeholder="SSH 비밀번호 (키 인증이면 비워 두기)" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && connect()}/></>}<button className="primary full" onClick={connect} disabled={loading || (health.mode === "ssh" && (!sshUsername || !sshHost || !sshPort))}>{loading ? "연결 중…" : "SERAPH 연결"}</button></div></div>}
+    {loading && <div className="loading-line"/>}
+    <ErrorToast error={error} onClose={() => setError(null)}/>
+  </div>;
+}
+
+function SectionTitle({ number, title, subtitle }) { return <div className="section-title"><span>{number}</span><div><h2>{title}</h2><p>{subtitle}</p></div></div>; }
+function Field({ label, hint, children }) { return <label className="field"><span>{label}{hint && <small>{hint}</small>}</span>{children}</label>; }
+function formatBytes(bytes) { if (bytes == null) return "—"; if (bytes < 1024) return `${bytes} B`; if (bytes < 1048576) return `${(bytes/1024).toFixed(1)} KB`; return `${(bytes/1048576).toFixed(1)} MB`; }
+
+function JobTable({ jobs, onOpen }) {
+  if (!jobs.length) return <div className="empty-table"><Icon name="jobs" size={28}/><strong>아직 준비한 작업이 없습니다</strong><span>새 작업 화면에서 첫 GPU 작업을 만들어 보세요.</span></div>;
+  return <div className="jobs-table"><div className="job-row job-header"><span>작업</span><span>상태</span><span>자원</span><span>파티션 · 노드</span><span>Slurm ID</span><span/></div>{jobs.map((job) => <button className="job-row" key={job.local_job_id} onClick={() => onOpen(job.local_job_id)}><span className="job-name"><i>{job.job_name?.slice(0, 1).toUpperCase()}</i><span><strong>{job.job_name}</strong><small>{job.created_at ? new Date(job.created_at).toLocaleString("ko-KR", {month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit"}) : ""}</small></span></span><StatusPill status={job.status}/><span>{job.gpus} GPU · CPU {job.cpus}/GPU</span><span>{job.partition}<small>{job.node || "자동 선택"}</small></span><code>{job.slurm_job_id || "—"}</code><Icon name="arrow" size={17}/></button>)}</div>;
+}

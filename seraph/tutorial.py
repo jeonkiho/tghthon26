@@ -41,10 +41,13 @@ def get_steps(snapshot=None):
             'id': 'ssh',
             'title': 'SSH 로 세라프에 접속하기',
             'body': (
-                '~/.ssh/config 에 Host 를 등록해 두면 매번 주소와 포트를 치지 않아도 '
-                '됩니다. 키를 등록하면 비밀번호도 묻지 않습니다.'
+                '실제 SERAPH 사용자명으로 접속합니다. 교외에서는 30080 포트, '
+                '교내에서는 22 포트를 사용합니다. GUI도 같은 값을 입력받습니다.'
             ),
-            'commands': ['ssh ariel'],
+            'commands': [
+                'ssh -p 30080 <사용자명>@ariel.khu.ac.kr  # 교외',
+                'ssh <사용자명>@ariel.khu.ac.kr           # 교내',
+            ],
             'pitfall': (
                 'VSCode 의 Remote-SSH 로 세라프에 붙는 것은 권장되지 않습니다. '
                 '로그인 노드에 무거운 프로세스를 띄우기 때문입니다. '
@@ -85,8 +88,8 @@ def get_steps(snapshot=None):
             'id': 'data',
             'title': '학습 데이터 두는 곳',
             'body': (
-                '공유 스토리지에서 데이터를 직접 반복해 읽으면 모두가 느려집니다. '
-                '노드 로컬로 복사한 뒤 학습하세요.'
+                '/data는 NAS입니다. 압축 데이터 한 파일을 GPU 노드의 '
+                '/local_datasets로 복사하고 그곳에서 압축을 푼 뒤 학습하세요.'
             ),
             'commands': [],
             'pitfall': (
@@ -99,13 +102,15 @@ def get_steps(snapshot=None):
             'id': 'submit',
             'title': 'job 제출하기',
             'body': (
-                'sbatch 로 스크립트를 냅니다. GPU 종류에 따라 표기가 다릅니다. '
+                '먼저 srun으로 코드·GPU·Conda 환경을 점검하고, 통과하면 sbatch로 '
+                '학습 스크립트를 냅니다. GPU 종류에 따라 표기가 다릅니다. '
                 '일반 GPU 는 --gres=gpu:N 과 함께 -w 로 v/g 노드를 반드시 '
                 '지정해야 하고, 고성능은 --gres=gpu:high_perf:N 만 쓰면 됩니다. '
                 '이 도구가 스크립트를 대신 만들어 주고, 절대 시작되지 않을 job 은 '
                 '미리 막아줍니다.'
             ),
             'commands': [
+                'srun --gres=gpu:1 --cpus-per-gpu=8 --mem-per-gpu=32G -p debug_grad --pty $SHELL',
                 'sbatch train.sh',
                 'squeue -u $USER',
                 'scancel <JOBID>',

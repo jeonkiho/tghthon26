@@ -46,7 +46,7 @@ def build(snapshot, args, conn=None):
     if args.section == 'lint':
         # 일부러 위반하는 예시. 프론트가 문제 목록 모양을 볼 수 있게 한다.
         return services.lint_job(snapshot, gpus=99, high_perf=True,
-                                 paths=['/nas2/data/imagenet'],
+                                 paths=['/data/datasets/imagenet'],
                                  time_limit='999:00:00')
     if args.section == 'wait':
         job_id = args.job_id

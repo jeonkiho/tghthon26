@@ -5,9 +5,10 @@
 #   ssh    - 실제 세라프에 접속한다.
 
 connection:
-  mode: mock
-  host: ariel               # ~/.ssh/config 의 Host 이름을 그대로 쓴다
-  poll_interval_seconds: 7  # 5~10초. 이보다 자주 부르지 않는다
+  mode: ssh
+  host: ariel.khu.ac.kr
+  port: 30080                # 교외 30080, 교내 22. GUI에서 바꿀 수 있다
+  poll_interval_seconds: 60  # 대시보드 자동 갱신. 숨겨진 탭에서는 중단한다
   login_node_load_limit: 8.0  # 1분 load 가 이 이상이면 폴링을 쉰다
 
 cluster:
@@ -37,21 +38,20 @@ policy:
   undergrad_gpu_max: 16
 
 lint:
-  # 학습 데이터를 여기서 바로 읽으면 안 된다. 노드 로컬로 복사해서 쓴다.
-  # 실제 마운트 지점을 확인해서 적은 것이다 (`/nas` 는 존재하지 않는다).
-  #
-  # 주의: 아래 정책은 세라프 운영 규칙을 그대로 옮긴 것이 아니라 팀이 정한 값이다.
-  # 조교/관리자에게 확인한 뒤 확정할 것.
+  # /data 는 NAS다. 학습 코드가 직접 읽지 않고 /local_datasets 로 복사해서 쓴다.
   blocked_paths:
-    - /nas2/
+    - /data/
   warn_paths:
-    - /ceph_data/   # 공유 스토리지. 대용량 반복 읽기는 피한다
-    - /home/        # 루트 파일시스템(96% 사용 중)에 있다. 학습 데이터용이 아니다
+    - /home/        # 설정 파일 외에는 두지 않는다
+
+storage:
+  data_root: /data
+  local_datasets_root: /local_datasets
 
 sbatch:
   # generate_sbatch() 기본값
-  default_cpus_per_task: 8
-  default_mem: 32G
+  default_cpus_per_gpu: 8
+  default_mem_per_gpu: 32G
   default_time: "24:00:00"
   output_pattern: "slurm-%j.out"   # %j = job id
 

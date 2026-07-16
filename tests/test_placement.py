@@ -156,7 +156,7 @@ def test_best_includes_ready_script(conn, snap):
     """추천한 곳에 바로 낼 수 있는 스크립트가 함께 온다."""
     r = placement.find_fastest(conn, snap, gpus=1, hours=2)
     script = r['best']['script']
-    assert script.startswith('#!/bin/bash')
+    assert script.startswith('#!/usr/bin/bash')
     assert '#SBATCH --partition=batch_grad' in script
     assert '--gres=gpu:1' in script
 

@@ -45,7 +45,9 @@ def test_env_var_beats_config_file_for_secret(tmp_path, monkeypatch):
 
 def test_real_config_yaml_loads():
     cfg = config_module.load()
-    assert '/nas2/' in cfg.blocked_paths     # /nas 는 존재하지 않는 경로다
+    assert '/data/' in cfg.blocked_paths
+    assert cfg.data_root == '/data'
+    assert cfg.local_datasets_root == '/local_datasets'
 
 
 # --- 파티션 ------------------------------------------------------------------
@@ -95,9 +97,8 @@ def test_lint_path_rules_respect_directory_boundary(snap):
     assert r['ok'] and not r['problems']
 
 
-def test_lint_blocks_nas2_not_nas(snap):
-    """실제 마운트는 /nas2 다. /nas 는 존재하지 않는다."""
-    r = services.lint_job(snap, gpus=1, paths=['/nas2/data/imagenet'])
+def test_lint_blocks_data_nas(snap):
+    r = services.lint_job(snap, gpus=1, paths=['/data/datasets/imagenet'])
     assert not r['ok']
     assert any(p['code'] == 'BLOCKED_PATH' for p in r['problems'])
 
@@ -114,7 +115,7 @@ def test_lint_uses_config_paths(snap, tmp_path):
                     encoding='utf-8')
     snap.config = config_module.load(path)
     assert not services.lint_job(snap, gpus=1, paths=['/scratch/x'])['ok']
-    assert services.lint_job(snap, gpus=1, paths=['/nas2/x'])['ok']  # 이제 허용
+    assert services.lint_job(snap, gpus=1, paths=['/data/x'])['ok']  # 이제 허용
 
 
 # --- sbatch ------------------------------------------------------------------
@@ -124,7 +125,9 @@ def test_generate_sbatch_standard_gres(snap):
     assert g['ok']
     assert '#SBATCH --gres=gpu:2' in g['script']
     assert 'high_perf' not in g['script']
-    assert g['script'].startswith('#!/bin/bash')
+    assert g['script'].startswith('#!/usr/bin/bash')
+    assert '#SBATCH --cpus-per-gpu=8' in g['script']
+    assert '#SBATCH --mem-per-gpu=32G' in g['script']
     assert g['script'].rstrip().endswith('python train.py')
 
 
@@ -210,7 +213,7 @@ def test_generate_sbatch_refuses_impossible_job(snap):
 
 def test_generate_sbatch_refuses_blocked_path(snap):
     g = sbatch.generate_sbatch(snap, name='t', command='python x.py',
-                               gpus=1, paths=['/nas2/data'])
+                               gpus=1, paths=['/data/datasets'])
     assert not g['ok'] and g['script'] is None
 
 
@@ -270,7 +273,7 @@ def test_tutorial_quota_text_reflects_real_qos(snap):
 
 def test_tutorial_data_step_lists_configured_paths(snap):
     step = next(s for s in tutorial.get_steps(snap) if s['id'] == 'data')
-    assert '/nas2/' in step['pitfall']
+    assert '/data/' in step['pitfall']
 
 
 # --- 폴링 --------------------------------------------------------------------
