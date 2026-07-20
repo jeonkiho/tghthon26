@@ -3,3 +3,46 @@
 .connect-card input{margin:7px 0}.connect-card code{font-size:9px;background:#eef2f6;padding:2px 4px;border-radius:4px}.connect-endpoint{display:grid;grid-template-columns:1fr 92px;gap:7px}.preflight-button{margin-top:10px}.prepared-box .preflight-output{max-height:105px;background:#0c3b31;color:#bcebdc;white-space:pre-wrap}
 .log-tabs>div{display:flex;align-items:center;gap:8px}
 @media(max-width:1250px){.page{padding-left:24px;padding-right:24px}.metrics{grid-template-columns:repeat(2,1fr)}.dashboard-grid{grid-template-columns:1fr}.wizard-layout{grid-template-columns:minmax(620px,1fr) 330px}.job-row{grid-template-columns:minmax(160px,1.4fr) 105px 105px minmax(130px,1fr) 75px 20px}}
+
+/* --- dashboard: 점유 추세 / 내 대기 작업 / 실시간 대기열 --- */
+.trend-panel{padding:20px 23px;margin-top:16px}
+.trend-wrap{margin-top:14px}
+.trend-legend{display:flex;gap:32px;margin-bottom:10px}
+.trend-legend>div{display:flex;flex-direction:column}
+.trend-legend strong{font-size:21px;line-height:1;color:#1d2740}
+.trend-legend span{font-size:9px;color:var(--muted);margin-top:4px;letter-spacing:.3px}
+.trend-svg{width:100%;height:132px;display:block}
+.trend-empty{margin-top:14px;height:118px;border:1px dashed #dde3ec;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#98a3b4;font-size:10px;text-align:center;padding:0 20px}
+.trend-empty svg{color:#c2cad6}
+.queue-grid{grid-template-columns:minmax(300px,.92fr) minmax(360px,1.28fr);margin-top:16px}
+.eta-panel,.queue-panel{padding:20px 22px}
+.pos-badge{font-size:9px;font-weight:700;color:#20a47f;background:#eaf9f4;border-radius:20px;padding:5px 11px;letter-spacing:.2px}
+.eta-list{list-style:none;margin:15px 0 0;padding:0;display:flex;flex-direction:column;gap:9px}
+.eta-item{border:1px solid #eaedf3;border-left:3px solid #cfd6e0;border-radius:9px;padding:11px 13px;background:#fbfcfe}
+.eta-item.quota{border-left-color:var(--amber);background:#fffdf8}
+.eta-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.eta-top strong{font-size:11px;color:#28324a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eta-reason{font-size:9px;color:#7b8698;margin:6px 0 0}
+.eta-advice{font-size:9px;color:#8a94a6;line-height:1.5;margin:6px 0 0}
+.eta-badge{flex:none;font-size:9px;font-weight:700;border-radius:7px;padding:4px 8px;white-space:nowrap}
+.eta-badge.ok{background:#eaf4ff;color:#3572c6}
+.eta-badge.low{background:#fff4e2;color:#b97c20}
+.eta-badge.unknown{background:#f1f3f7;color:#8792a4}
+.queue-table{margin-top:14px}
+.queue-row{display:grid;grid-template-columns:30px minmax(120px,1.5fr) 74px minmax(94px,1fr) 92px;gap:10px;align-items:center;min-height:38px;border-top:1px solid #edf0f5;font-size:10px;color:#66728a}
+.queue-header{border:0;min-height:24px;color:#a0a9b9;font-size:8px;text-transform:uppercase;letter-spacing:.7px}
+.queue-row.mine{background:#eefaf6;border-radius:7px;border-top-color:transparent}
+.queue-row.mine .qpos{background:#21bd91;color:#fff}
+.qpos{width:22px;height:22px;border-radius:6px;background:#eef1f6;color:#5a6785;font-weight:700;font-size:9px;display:grid;place-items:center}
+.qname{display:flex;flex-direction:column;min-width:0}
+.qname strong{font-size:10px;color:#28324a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qname small{font-size:8px;color:#98a2b3;margin-top:2px}
+.queue-row.mine .qname small{color:#1a9c76;font-weight:700}
+.qgpu{font-size:9px}
+.qreason{font-size:9px}
+.qreason.quota{color:#b97c20}
+.qeta{font-size:9px;color:#55617a;text-align:right;font-variant-numeric:tabular-nums}
+.queue-more{font-size:9px;color:#98a3b4;text-align:center;padding:10px 0 2px}
+.empty-mini{min-height:118px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#9aa5b6;font-size:10px}
+.empty-mini svg{color:#c2cad6}
+@media(max-width:1250px){.queue-grid{grid-template-columns:1fr}}

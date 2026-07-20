@@ -79,6 +79,8 @@ export default function App() {
   const [nodes, setNodes] = useState([]);
   const [partitions, setPartitions] = useState({});
   const [diagnosis, setDiagnosis] = useState(null);
+  const [queue, setQueue] = useState(null);
+  const [history, setHistory] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [form, setForm] = useState(blankForm);
   const [recommendation, setRecommendation] = useState(null);
@@ -99,12 +101,14 @@ export default function App() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [meData, statusData, usageData, nodeData, partitionData, diagnosisData] = await Promise.all([
+      const [meData, statusData, usageData, nodeData, partitionData, diagnosisData, queueData, historyData] = await Promise.all([
         api("/api/v1/me"), api("/api/v1/cluster/status"), api("/api/v1/cluster/usage"),
         api("/api/v1/cluster/nodes?gpus=1"), api("/api/v1/cluster/partitions"), api("/api/v1/jobs/diagnosis"),
+        api("/api/v1/queue"), api("/api/v1/cluster/history"),
       ]);
       setMe(meData); setCluster(statusData); setUsage(usageData); setNodes(nodeData.nodes || []);
       setPartitions(partitionData.partitions || {}); setDiagnosis(diagnosisData);
+      setQueue(queueData); setHistory(historyData.samples || []);
       setForm((old) => ({
         ...old,
         partition: old.partition || meData.default_partition || "",
@@ -277,6 +281,10 @@ export default function App() {
           <Metric icon="jobs" label="실행 중인 작업" value={cluster?.running_jobs} detail={`대기 ${cluster?.pending_jobs ?? "—"}개`} accent="violet"/>
           <Metric icon="spark" label="내 GPU 사용" value={usage ? `${usage.gpus_in_use}/${usage.gpus_limit ?? "∞"}` : null} detail={`${usage?.pending_jobs ?? "—"}개 대기`} accent="amber"/>
         </div>
+        <article className="panel trend-panel">
+          <div className="panel-head"><div><p className="eyebrow">OCCUPANCY TREND</p><h2>GPU 점유 추세</h2></div><span>{history.length}개 표본 · 폴링마다 기록</span></div>
+          <TrendChart samples={history}/>
+        </article>
         <div className="dashboard-grid">
           <article className="panel resource-panel"><div className="panel-head"><div><p className="eyebrow">RESOURCE MAP</p><h2>노드 가용 현황</h2></div><span>사용 가능 GPU 기준</span></div>
             <div className="node-table"><div className="node-row node-header"><span>노드</span><span>유형</span><span>상태</span><span>사용 가능</span><span>GPU</span></div>{visibleNodes.map((node) => <div className="node-row" key={node.name}><strong>{node.name}</strong><span>{node.is_high_perf ? "고성능" : "일반"}</span><span className={node.schedulable ? "node-ok" : "node-off"}>{node.schedulable ? "사용 가능" : node.state}</span><span>{node.usable_gpus} / {node.total_gpus}</span><div className="mini-bar"><i style={{ width: `${node.total_gpus ? node.usable_gpus / node.total_gpus * 100 : 0}%` }}/></div></div>)}</div>
@@ -286,6 +294,17 @@ export default function App() {
             <div className="quick-controls"><label>GPU 수<select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value})}>{[1,2,4,8,16].map(n => <option key={n}>{n}</option>)}</select></label><label>예상 시간<input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></label></div>
             <button className="primary full" onClick={recommend} disabled={loading}><Icon name="spark" size={18}/> 가장 빠른 위치 찾기</button>
             {recommendation && <div className={`recommend-box ${recommendation.can_start_now ? "now" : "wait"}`}><span>{recommendation.can_start_now ? "지금 실행 가능" : "추천 위치"}</span><strong>{recommendation.best ? `${recommendation.best.partition} · ${recommendation.best.node}` : "조건에 맞는 위치 없음"}</strong><p>{recommendation.headline}</p></div>}
+          </article>
+        </div>
+        <div className="dashboard-grid queue-grid">
+          <article className="panel eta-panel">
+            <div className="panel-head"><div><p className="eyebrow">MY QUEUE</p><h2>내 대기 작업 · 예상 시작</h2></div>{queue?.my_next_position != null && <span className="pos-badge">대기열 {queue.my_next_position}번째</span>}</div>
+            {diagnosis?.jobs?.length ? <ul className="eta-list">{diagnosis.jobs.map((job) => <EtaItem key={job.job_id} job={job}/>)}</ul>
+              : <div className="empty-mini"><Icon name="check" size={20}/><span>대기 중인 내 작업이 없습니다.</span></div>}
+          </article>
+          <article className="panel queue-panel">
+            <div className="panel-head"><div><p className="eyebrow">LIVE QUEUE</p><h2>실시간 대기열</h2></div><span>대기 {queue?.pending_count ?? "—"} · 실행 {queue?.running_count ?? "—"}</span></div>
+            <QueueTable pending={queue?.pending || []}/>
           </article>
         </div>
         <article className="panel recent-panel"><div className="panel-head"><div><p className="eyebrow">RECENT JOBS</p><h2>최근 작업</h2></div><button className="text-button" onClick={() => setTab("jobs")}>전체 보기 <Icon name="arrow" size={15}/></button></div><JobTable jobs={jobs.slice(0, 5)} onOpen={(id) => {openJob(id); setTab("jobs");}}/></article>
@@ -339,4 +358,74 @@ function formatBytes(bytes) { if (bytes == null) return "—"; if (bytes < 1024)
 function JobTable({ jobs, onOpen }) {
   if (!jobs.length) return <div className="empty-table"><Icon name="jobs" size={28}/><strong>아직 준비한 작업이 없습니다</strong><span>새 작업 화면에서 첫 GPU 작업을 만들어 보세요.</span></div>;
   return <div className="jobs-table"><div className="job-row job-header"><span>작업</span><span>상태</span><span>자원</span><span>파티션 · 노드</span><span>Slurm ID</span><span/></div>{jobs.map((job) => <button className="job-row" key={job.local_job_id} onClick={() => onOpen(job.local_job_id)}><span className="job-name"><i>{job.job_name?.slice(0, 1).toUpperCase()}</i><span><strong>{job.job_name}</strong><small>{job.created_at ? new Date(job.created_at).toLocaleString("ko-KR", {month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit"}) : ""}</small></span></span><StatusPill status={job.status}/><span>{job.gpus} GPU · CPU {job.cpus}/GPU</span><span>{job.partition}<small>{job.node || "자동 선택"}</small></span><code>{job.slurm_job_id || "—"}</code><Icon name="arrow" size={17}/></button>)}</div>;
+}
+
+function formatEta(iso) {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return { abs: "—", rel: "" };
+  const abs = t.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  const diff = (t.getTime() - Date.now()) / 1000;
+  if (diff <= 60) return { abs, rel: "곧" };
+  const h = Math.floor(diff / 3600), m = Math.floor((diff % 3600) / 60);
+  return { abs, rel: h > 0 ? `약 ${h}시간 ${m}분 뒤` : `약 ${m}분 뒤` };
+}
+
+function EtaBadge({ start, confidence }) {
+  if (!start) return <span className="eta-badge unknown">시작 시각 미정</span>;
+  const { abs, rel } = formatEta(start);
+  const cls = confidence === "medium" ? "ok" : confidence === "low" ? "low" : "unknown";
+  const uncertain = confidence !== "medium";
+  return <span className={`eta-badge ${cls}`} title={uncertain ? "Slurm 추정이 부정확할 수 있습니다" : "Slurm 추정 기준"}>{abs}{rel ? ` · ${rel}` : ""}{uncertain ? " (추정)" : ""}</span>;
+}
+
+function EtaItem({ job }) {
+  return <li className={`eta-item ${job.blocked_by_quota ? "quota" : ""}`}>
+    <div className="eta-top"><strong>{job.name || job.job_id}</strong><EtaBadge start={job.estimated_start} confidence={job.confidence}/></div>
+    <p className="eta-reason">{job.reason_text || job.reason}{job.requested_gpus ? ` · GPU ${job.requested_gpus}개` : ""}</p>
+    {job.advice && <p className="eta-advice">{job.advice}</p>}
+  </li>;
+}
+
+function QueueTable({ pending }) {
+  if (!pending.length) return <div className="empty-mini"><Icon name="jobs" size={20}/><span>대기 중인 작업이 없습니다.</span></div>;
+  const shown = pending.slice(0, 12);
+  return <div className="queue-table">
+    <div className="queue-row queue-header"><span>#</span><span>작업 · 사용자</span><span>GPU</span><span>대기 사유</span><span>예상 시작</span></div>
+    {shown.map((j) => <div className={`queue-row ${j.is_mine ? "mine" : ""}`} key={j.job_id}>
+      <span className="qpos">{j.queue_position}</span>
+      <span className="qname"><strong>{j.name || j.job_id}</strong><small>{j.is_mine ? "나" : j.user}</small></span>
+      <span className="qgpu">{j.gpus}{j.high_perf_gpus ? " · 고성능" : ""}</span>
+      <span className={`qreason ${j.blocked_by_quota ? "quota" : ""}`}>{j.reason_text || j.reason}</span>
+      <span className="qeta">{j.estimated_start ? formatEta(j.estimated_start).abs : "—"}{j.estimated_start && j.confidence !== "medium" ? " (추정)" : ""}</span>
+    </div>)}
+    {pending.length > shown.length && <div className="queue-more">외 {pending.length - shown.length}개 더 대기 중</div>}
+  </div>;
+}
+
+function TrendChart({ samples }) {
+  if (!samples || samples.length < 2) {
+    return <div className="trend-empty"><Icon name="spark" size={22}/><span>점유 추세를 수집하는 중입니다. 대시보드가 갱신되면 채워집니다.</span></div>;
+  }
+  const W = 680, H = 132, pad = 8, n = samples.length;
+  const util = samples.map((s) => Math.min(1, Math.max(0, s.utilization)));
+  const x = (i) => pad + (i / (n - 1)) * (W - 2 * pad);
+  const y = (v) => pad + (1 - v) * (H - 2 * pad);
+  const line = util.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(n - 1).toFixed(1)},${(H - pad).toFixed(1)} L${x(0).toFixed(1)},${(H - pad).toFixed(1)} Z`;
+  const last = samples[n - 1];
+  return <div className="trend-wrap">
+    <div className="trend-legend">
+      <div><strong>{Math.round(last.utilization * 100)}%</strong><span>현재 점유율</span></div>
+      <div><strong>{last.free_gpus}</strong><span>사용 가능 GPU</span></div>
+      <div><strong>{last.pending_jobs}</strong><span>대기 작업</span></div>
+      <div><strong>{last.running_jobs}</strong><span>실행 작업</span></div>
+    </div>
+    <svg className="trend-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="GPU 점유율 추세">
+      <defs><linearGradient id="trendfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#21bd91" stopOpacity="0.28"/><stop offset="100%" stopColor="#21bd91" stopOpacity="0"/></linearGradient></defs>
+      <line x1={pad} y1={y(0.5)} x2={W - pad} y2={y(0.5)} stroke="#e4e8f0" strokeWidth="1" strokeDasharray="3 4" vectorEffect="non-scaling-stroke"/>
+      <path d={area} fill="url(#trendfill)"/>
+      <path d={line} fill="none" stroke="#17ac82" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/>
+      <circle cx={x(n - 1)} cy={y(util[n - 1])} r="3.4" fill="#17ac82" vectorEffect="non-scaling-stroke"/>
+    </svg>
+  </div>;
 }

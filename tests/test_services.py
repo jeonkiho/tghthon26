@@ -71,6 +71,42 @@ def test_parse_partitions_marks_default():
     assert p['debug_grad'].time_limit_seconds == 14400
 
 
+# --- queue / eta -------------------------------------------------------------
+
+def test_confidence_rules():
+    assert services._confidence('Resources', '2026-07-10T21:00:00') == 'medium'
+    assert services._confidence('QOSMaxGRESPerUser', '2026-07-10T21:00:00') == 'low'
+    assert services._confidence('Dependency', '2026-07-10T21:00:00') == 'low'
+    assert services._confidence('Resources', None) == 'unknown'
+
+
+def test_get_queue_ranks_and_marks_mine(snap):
+    q = services.get_queue(snap)
+    assert q['pending_count'] == len(q['pending'])
+    assert q['running_count'] == len(q['running'])
+    # 순번은 1..N 로 연속이며 중복이 없다.
+    positions = [row['queue_position'] for row in q['pending']]
+    assert positions == list(range(1, len(positions) + 1))
+    # is_mine 은 사용자명과 일치해야 한다.
+    for row in q['pending'] + q['running']:
+        assert row['is_mine'] == (row['user'] == snap.me)
+    for row in q['pending']:
+        assert row['confidence'] in ('medium', 'low', 'unknown')
+        assert row['blocked_by_quota'] == (row['reason'] == 'QOSMaxGRESPerUser')
+
+
+def test_get_queue_my_next_position(snap):
+    q = services.get_queue(snap)
+    mine = [r['queue_position'] for r in q['pending'] if r['is_mine']]
+    assert q['my_next_position'] == (min(mine) if mine else None)
+
+
+def test_diagnose_includes_confidence(snap):
+    d = services.diagnose_pending(snap, snap.me)
+    for job in d['jobs']:
+        assert job['confidence'] in ('medium', 'low', 'unknown')
+
+
 # --- lint --------------------------------------------------------------------
 
 def test_lint_blocks_over_time_limit(snap):

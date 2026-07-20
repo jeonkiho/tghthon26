@@ -351,6 +351,50 @@ Slurm이 계산한 값을 쓴다. 직접 계산하지 않는다.
 `confidence != "medium"` 이면 "약 21:18 (추정 부정확)" 처럼 흐리게 표시할 것.
 `found: false` 면 나머지 키는 없다.
 
+`diagnose_pending()` 의 각 job 에도 같은 `confidence` 가 들어간다(위 규칙과 동일).
+
+---
+
+## `get_queue(snap, partition='batch_grad')`
+
+대기열 전체 뷰. "내 작업이 언제쯤 들어가고 어디쯤 있나"에 답한다. 대시보드용.
+
+```json
+{
+  "partition": "batch_grad",
+  "pending_count": 39,
+  "running_count": 72,
+  "my_pending_count": 2,
+  "my_running_count": 1,
+  "my_next_position": 3,          // 내 대기 job 중 가장 앞선 순번. 없으면 null
+  "pending": [
+    {
+      "job_id": "366184", "name": "...", "user": "user08", "is_mine": false,
+      "gpus": 1, "high_perf_gpus": 0,
+      "reason": "Resources", "reason_text": "클러스터에 여유 GPU 부족",
+      "estimated_start": "2026-07-10T16:53:08",   // null 가능
+      "confidence": "medium",      // medium | low | unknown (estimate_wait_time 과 동일 규칙)
+      "blocked_by_quota": false,
+      "queue_position": 1
+    }
+  ],
+  "running": [
+    {"job_id": "...", "name": "...", "user": "...", "is_mine": true,
+     "gpus": 2, "high_perf_gpus": 0, "nodes": "ariel-v7", "time_used": "2-19:04:48"}
+  ]
+}
+```
+
+- `pending` 은 **추정 시작 시각 순**(= `queue_position` 오름차순)으로 정렬돼 있다.
+- `queue_position` 은 진짜 Slurm 우선순위 순위가 아니라 `squeue --start` 추정 시각
+  기준의 대략적 순번이다. **`blocked_by_quota: true` 인 job 은 순번이 큰 의미가
+  없다**(GPU 경쟁이 아니라 본인 QOS 한도로 막힌 것). 그런 행은 순번을 흐리게 두거나
+  사유를 강조하는 게 맞다.
+- `is_mine` 으로 내 job 을 하이라이트한다.
+
+점유 추세(시계열)는 별도 HTTP 엔드포인트 `GET /api/v1/cluster/history` 가 백엔드
+메모리에 폴링마다 쌓은 표본을 준다(별도 DB 없음, 서버 재시작 시 초기화).
+
 ---
 
 ## `lint_job(snap, partition, gpus, high_perf, paths, time_limit, node)`

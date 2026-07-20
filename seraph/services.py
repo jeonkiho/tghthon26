@@ -277,13 +277,15 @@ def diagnose_pending(snapshot, user, partition=None):
     findings = []
     for job in pending:
         reason = job.reason
+        start = snapshot.start_times.get(job.job_id)
         detail = {
             'job_id': job.job_id,
             'name': job.name,
             'reason': reason,
             'reason_text': REASON_TEXT.get(reason, reason),
             'requested_gpus': job.gpus,
-            'estimated_start': snapshot.start_times.get(job.job_id),
+            'estimated_start': start,
+            'confidence': _confidence(reason, start),   # medium | low | unknown
             'blocked_by_quota': False,
             'quota_kind': None,     # 'gpu' | 'high_perf_gpu' | 'running_jobs'
             'advice': '',
@@ -370,6 +372,19 @@ def _headline(blocked, pending, free_gpus, usage):
     )
 
 
+def _confidence(reason, start):
+    """예상 시작 시각의 신뢰도.
+
+    Slurm 이 시각을 못 내면 unknown. QOS 한도/의존성으로 막힌 job 은 같은 사용자
+    대기 job 전부에 똑같은 시각이 찍혀 부정확하므로 low. 그 외에는 medium.
+    """
+    if start is None:
+        return 'unknown'
+    if reason in ('QOSMaxGRESPerUser', 'Dependency'):
+        return 'low'
+    return 'medium'
+
+
 def estimate_wait_time(snapshot, job_id):
     """예상 시작 시각.
 
@@ -383,19 +398,16 @@ def estimate_wait_time(snapshot, job_id):
 
     start = snapshot.start_times.get(job.job_id)
     reason = job.reason
+    confidence = _confidence(reason, start)
 
     if start is None:
-        confidence = 'unknown'
         note = 'Slurm 이 시작 시각을 추정하지 못했습니다.'
     elif reason == 'QOSMaxGRESPerUser':
-        confidence = 'low'
         note = ('할당량으로 막힌 job 은 Slurm 추정이 부정확합니다. '
                 '앞선 본인 job 이 끝나면 더 빨라집니다.')
     elif reason == 'Dependency':
-        confidence = 'low'
         note = '선행 job 의 종료 시각에 따라 달라집니다.'
     else:
-        confidence = 'medium'
         note = 'Slurm 추정 기준입니다.'
 
     return {
@@ -407,6 +419,73 @@ def estimate_wait_time(snapshot, job_id):
         'source': 'squeue --start',
         'reason': reason,
         'note': note,
+    }
+
+
+def get_queue(snapshot, partition=None):
+    """대기열 전체 뷰. "내 작업이 언제쯤 들어가고 어디쯤 있나" 에 답한다.
+
+    실행 중 / 대기 중 job 을 나눠서 준다. 대기 job 에는 추정 순번(queue_position)과
+    예상 시작 시각·신뢰도를 붙인다.
+
+    순번은 Slurm 이 추정한 시작 시각 순이다. 진짜 우선순위 순위는 아니고
+    (특히 QOS 한도로 막힌 job 은 순번이 큰 의미가 없다 -> blocked_by_quota 로 표시),
+    "내 job 앞에 몇 개가 있나" 의 대략적인 감을 주는 값이다.
+    """
+    partition = _partition(snapshot, partition)
+    me = snapshot.me
+    in_part = [j for j in snapshot.jobs if j.partition == partition]
+    running = [j for j in in_part if j.is_running]
+    pending = [j for j in in_part if j.is_pending]
+
+    def order_key(j):
+        start = snapshot.start_times.get(j.job_id)
+        # 시각이 있는 job 을 앞으로, 없는 job 은 뒤로. 동률은 job_id 로 안정 정렬.
+        return (0, start) if start else (1, j.job_id)
+
+    ordered = sorted(pending, key=order_key)
+    rank = {j.job_id: i + 1 for i, j in enumerate(ordered)}
+
+    def pending_row(job):
+        start = snapshot.start_times.get(job.job_id)
+        return {
+            'job_id': job.job_id,
+            'name': job.name,
+            'user': job.user,
+            'is_mine': job.user == me,
+            'gpus': job.gpus,
+            'high_perf_gpus': job.high_perf_gpus,
+            'reason': job.reason,
+            'reason_text': REASON_TEXT.get(job.reason, job.reason),
+            'estimated_start': start,
+            'confidence': _confidence(job.reason, start),
+            'blocked_by_quota': job.reason == 'QOSMaxGRESPerUser',
+            'queue_position': rank[job.job_id],
+        }
+
+    def running_row(job):
+        return {
+            'job_id': job.job_id,
+            'name': job.name,
+            'user': job.user,
+            'is_mine': job.user == me,
+            'gpus': job.gpus,
+            'high_perf_gpus': job.high_perf_gpus,
+            'nodes': job.nodes,
+            'time_used': job.time_used,
+        }
+
+    my_positions = [rank[j.job_id] for j in ordered if j.user == me]
+    return {
+        'partition': partition,
+        'pending_count': len(pending),
+        'running_count': len(running),
+        'my_pending_count': sum(1 for j in pending if j.user == me),
+        'my_running_count': sum(1 for j in running if j.user == me),
+        # 내 대기 job 중 가장 앞선 순번. 없으면 None.
+        'my_next_position': min(my_positions) if my_positions else None,
+        'pending': [pending_row(j) for j in ordered],
+        'running': [running_row(j) for j in sorted(running, key=lambda x: x.job_id)],
     }
 
 
