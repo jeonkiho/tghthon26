@@ -36,6 +36,7 @@ function Icon({ name, size = 20 }) {
     server: <><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></>,
     history: <><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3.5 2"/></>,
     warn: <><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></>,
+    book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -86,6 +87,7 @@ export default function App() {
   const [jobHistory, setJobHistory] = useState(null);
   const [historyDays, setHistoryDays] = useState(7);
   const [historyJob, setHistoryJob] = useState(null);
+  const [tutorial, setTutorial] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [form, setForm] = useState(blankForm);
   const [recommendation, setRecommendation] = useState(null);
@@ -160,6 +162,9 @@ export default function App() {
   useEffect(() => {
     if (tab === "history" && health?.seraph_reachable && !jobHistory) loadHistory(historyDays);
   }, [tab, health?.seraph_reachable, jobHistory, historyDays, loadHistory]);
+  useEffect(() => {
+    if (tab === "tutorial" && !tutorial) api("/api/v1/tutorial").then(setTutorial).catch(report);
+  }, [tab, tutorial, report]);
 
   const refreshJobStatus = useCallback(async (localId) => {
     try {
@@ -271,7 +276,7 @@ export default function App() {
   });
 
   const nav = [
-    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"],
+    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"],
   ];
   const visibleNodes = cluster?.nodes?.slice(0, 8) || nodes.slice(0, 8);
 
@@ -285,7 +290,7 @@ export default function App() {
 
     <main>
       <header>
-        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : tab === "history" ? "JOB HISTORY" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : tab === "history" ? "완료 작업 이력" : "내 작업"}</h1></div>
+        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : tab === "history" ? "JOB HISTORY" : tab === "tutorial" ? "GUIDE" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : tab === "history" ? "완료 작업 이력" : tab === "tutorial" ? "세라프 사용법" : "내 작업"}</h1></div>
         <div className="header-actions"><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading}><Icon name="refresh"/></button></div>
       </header>
 
@@ -375,6 +380,12 @@ export default function App() {
         </article>}
         {!jobHistory && !loading && <div className="empty-table"><Icon name="history" size={28}/><strong>이력을 불러오세요</strong><span>위에서 기간을 선택하면 완료된 작업을 조회합니다.</span></div>}
         {historyJob && <HistoryDetail job={historyJob} onClose={() => setHistoryJob(null)}/>}
+      </section>}
+
+      {tab === "tutorial" && <section className="page tutorial-page">
+        <div className="welcome-strip"><div><span className="live-dot"/>PRACTICE</div><p>세라프 GPU 클러스터 사용 흐름입니다. 도구가 막아주지 못하는 주의사항까지 단계별로 안내합니다. (연습용 · 실서버에 영향 없음)</p></div>
+        {!tutorial && <div className="empty-table"><Icon name="book" size={28}/><strong>튜토리얼을 불러오는 중…</strong></div>}
+        {tutorial && <div className="tutorial-steps">{tutorial.steps.map((step, i) => <TutorialStep key={step.id} step={step} n={i + 1}/>)}</div>}
       </section>}
     </main>
 
@@ -492,6 +503,15 @@ function HistoryTable({ jobs, onOpen, selectedId }) {
       <span className={`hreason ${j.succeeded ? "ok" : "bad"}`}>{j.succeeded ? "정상 종료" : j.reason_text}</span>
     </button>)}
   </div>;
+}
+
+function TutorialStep({ step, n }) {
+  return <article className="panel tut-step">
+    <div className="tut-head"><span className="tut-num">{String(n).padStart(2, "0")}</span><h2>{step.title}</h2></div>
+    <p className="tut-body">{step.body}</p>
+    {step.commands?.length > 0 && <div className="tut-cmds">{step.commands.map((c, i) => <div className="tut-cmd" key={i}><code>{c}</code><button onClick={() => navigator.clipboard.writeText(c.split("#")[0].trim())} title="명령만 복사"><Icon name="copy" size={14}/></button></div>)}</div>}
+    {step.pitfall && <div className="tut-pitfall"><Icon name="warn" size={16}/><p>{step.pitfall}</p></div>}
+  </article>;
 }
 
 function HistoryDetail({ job, onClose }) {

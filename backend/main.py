@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from seraph import config as config_module
-from seraph import history, placement, sbatch, services
+from seraph import history, placement, sbatch, services, tutorial
 
 from .cache import SnapshotCache
 from .dependencies import ConnectionManager
@@ -129,6 +129,12 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     async def me() -> dict[str, Any]:
         snapshot, cache_meta = await cached_snapshot()
         return {"ok": True, **services.whoami(snapshot), "cache": cache_meta}
+
+    @app.get("/api/v1/tutorial")
+    async def get_tutorial_route() -> dict[str, Any]:
+        # 튜토리얼은 항상 mock 스냅샷 위에서 돈다(실서버 무관). SSH 연결 없이도 동작.
+        result = await to_thread.run_sync(tutorial.get_tutorial)
+        return {"ok": True, **result}
 
     @app.post("/api/v1/local/select-code")
     async def select_local_code(

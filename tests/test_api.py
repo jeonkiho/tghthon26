@@ -81,6 +81,19 @@ def test_queue_eta_and_history_apis():
         assert client.get("/api/v1/jobs/eta/999999999").status_code == 404
 
 
+def test_tutorial_api():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/tutorial").json()
+        assert body["ok"] is True
+        assert body["mode"] == "practice"          # 항상 mock 위에서 돈다
+        assert [s["id"] for s in body["steps"]] == ["ssh", "quota", "status", "data", "submit", "result"]
+        for step in body["steps"]:
+            assert step["title"] and step["body"]
+            assert isinstance(step["commands"], list)
+        assert "sample_status" in body
+
+
 def test_recommendation_and_preview_reuse_core():
     app = create_app()
     with TestClient(app) as client:

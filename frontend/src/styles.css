@@ -90,3 +90,19 @@ button.hrow:hover{background:#f8fafc}
 .mem-bar i.danger{background:#e0616d}
 .mem-sub{font-size:9px;color:#98a2b3;text-align:right}
 @media(max-width:1250px){.hrow{grid-template-columns:minmax(150px,1.4fr) 96px minmax(110px,1fr) 66px 84px minmax(100px,1fr)}}
+
+/* --- 튜토리얼 탭 --- */
+.tutorial-steps{display:flex;flex-direction:column;gap:14px;margin-top:16px;max-width:920px}
+.tut-step{padding:20px 23px}
+.tut-head{display:flex;align-items:center;gap:13px}
+.tut-num{width:34px;height:34px;flex:none;border-radius:9px;background:#eef4ff;color:#3f63c9;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-weight:700;font-size:12px;display:grid;place-items:center}
+.tut-head h2{font-size:15px;margin:0}
+.tut-body{font-size:11px;color:#5a6577;line-height:1.7;margin:12px 0 0}
+.tut-cmds{display:flex;flex-direction:column;gap:7px;margin:13px 0 0}
+.tut-cmd{display:flex;align-items:center;gap:8px;background:#101827;border-radius:8px;padding:9px 11px}
+.tut-cmd code{flex:1;font:10px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;color:#b9c7da;white-space:pre-wrap;word-break:break-all}
+.tut-cmd button{flex:none;border:0;background:#22304a;color:#8fa0bb;width:26px;height:26px;border-radius:6px;display:grid;place-items:center}
+.tut-cmd button:hover{color:#cdd9ea}
+.tut-pitfall{display:flex;gap:9px;align-items:flex-start;background:#fff7ea;border:1px solid #f3e0be;border-radius:9px;padding:11px 12px;margin:13px 0 0;color:#a5701c}
+.tut-pitfall svg{flex:none;margin-top:1px}
+.tut-pitfall p{font-size:10px;line-height:1.6;margin:0}
