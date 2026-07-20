@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from seraph import config as config_module
-from seraph import history, placement, sbatch, services, slack, tutorial
+from seraph import clusters, history, placement, sbatch, services, slack, tutorial
 
 from .cache import SnapshotCache
 from .dependencies import ConnectionManager
@@ -172,6 +172,11 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     async def cluster_partitions() -> dict[str, Any]:
         snapshot, cache_meta = await cached_snapshot()
         return {"ok": True, "partitions": services.get_partitions(snapshot), "cache": cache_meta}
+
+    @app.get("/api/v1/clusters")
+    async def clusters_route() -> dict[str, Any]:
+        # 3개 클러스터 안내(정적). 실시간 아님, SSH 무관.
+        return {"ok": True, **clusters.overview()}
 
     @app.get("/api/v1/cluster/usage")
     async def cluster_usage() -> dict[str, Any]:

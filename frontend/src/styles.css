@@ -124,3 +124,24 @@ button.hrow:hover{background:#f8fafc}
 .notice-error{display:flex;gap:10px;align-items:flex-start;background:#fff7ea;border:1px solid #f3e0be;border-radius:10px;padding:13px 15px;margin-top:16px;color:#a5701c}
 .notice-error svg{flex:none;margin-top:1px}
 .notice-error p{font-size:10.5px;line-height:1.6;margin:0}
+
+/* --- 대시보드: 클러스터 안내 --- */
+.cluster-panel{padding:21px 23px;margin-top:16px}
+.cluster-notice{display:flex;gap:9px;align-items:flex-start;background:#fff7ea;border:1px solid #f3e0be;border-radius:9px;padding:11px 12px;margin:14px 0 2px;color:#a5701c}
+.cluster-notice svg{flex:none;margin-top:1px}
+.cluster-notice p{font-size:10px;line-height:1.6;margin:0}
+.cluster-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
+.cluster-card{border:1px solid var(--line);border-radius:11px;padding:15px 16px;background:#fbfcfd}
+.cluster-card.mine{border-color:#8fd3bf;background:#f2fbf8;box-shadow:0 0 0 3px #38c19a14}
+.cluster-card.muted{background:#fafbfc}
+.cc-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.cc-head strong{font-size:13px;color:#253047;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.3px}
+.cc-tags{display:flex;gap:5px}
+.cc-live,.cc-mine{font-style:normal;font-size:7px;font-weight:700;letter-spacing:.4px;border-radius:20px;padding:3px 7px}
+.cc-live{background:#e7f8f2;color:#149c75}
+.cc-mine{background:#eef4ff;color:#3f63c9}
+.cc-gpu{font-size:23px;font-weight:700;color:#1d2740;margin:12px 0 2px;display:flex;align-items:baseline;gap:5px}
+.cc-gpu span{font-size:9px;font-weight:600;color:#98a2b3}
+.cc-allowed{font-size:10px;color:#5a6577;line-height:1.5;margin:8px 0 0;min-height:30px}
+.cc-host{font-size:9px;color:#98a2b3;margin:6px 0 0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+@media(max-width:1250px){.cluster-cards{grid-template-columns:1fr}}

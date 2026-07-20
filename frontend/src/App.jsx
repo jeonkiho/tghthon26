@@ -85,6 +85,7 @@ export default function App() {
   const [diagnosis, setDiagnosis] = useState(null);
   const [queue, setQueue] = useState(null);
   const [history, setHistory] = useState([]);
+  const [clusterInfo, setClusterInfo] = useState(null);
   const [jobHistory, setJobHistory] = useState(null);
   const [historyDays, setHistoryDays] = useState(7);
   const [historyJob, setHistoryJob] = useState(null);
@@ -142,6 +143,7 @@ export default function App() {
   const initialize = useCallback(async () => {
     try {
       const data = await api("/api/v1/health"); setHealth(data);
+      api("/api/v1/clusters").then(setClusterInfo).catch(() => {});  // 정적 안내, 1회만
       setSshUsername((old) => old || data.ssh_username || "");
       setSshHost((old) => old || data.ssh_host || "ariel.khu.ac.kr");
       setSshPort((old) => old || String(data.ssh_port || 30080));
@@ -337,6 +339,16 @@ export default function App() {
             <QueueTable pending={queue?.pending || []}/>
           </article>
         </div>
+        {clusterInfo && <article className="panel cluster-panel">
+          <div className="panel-head"><div><p className="eyebrow">CLUSTERS</p><h2>클러스터 안내</h2></div><span>{clusterInfo.note}</span></div>
+          {me?.on_primary === false && me?.cluster_notice && <div className="cluster-notice"><Icon name="warn" size={16}/><p>{me.cluster_notice}</p></div>}
+          <div className="cluster-cards">{Object.entries(clusterInfo.clusters).map(([name, c]) => <div className={`cluster-card ${me?.cluster === name ? "mine" : ""} ${c.connectable ? "" : "muted"}`} key={name}>
+            <div className="cc-head"><strong>{name}</strong><span className="cc-tags">{c.connectable && <em className="cc-live">실시간</em>}{me?.cluster === name && <em className="cc-mine">내 소속</em>}</span></div>
+            <div className="cc-gpu">{c.total_gpus}<span>GPU</span></div>
+            <p className="cc-allowed">{c.allowed}</p>
+            <p className="cc-host">{c.host}</p>
+          </div>)}</div>
+        </article>}
         <article className="panel recent-panel"><div className="panel-head"><div><p className="eyebrow">RECENT JOBS</p><h2>최근 작업</h2></div><button className="text-button" onClick={() => setTab("jobs")}>전체 보기 <Icon name="arrow" size={15}/></button></div><JobTable jobs={jobs.slice(0, 5)} onOpen={(id) => {openJob(id); setTab("jobs");}}/></article>
       </section>}
 

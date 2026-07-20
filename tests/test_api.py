@@ -52,6 +52,12 @@ def test_health_and_dashboard_apis():
         assert "gpus_in_use" in client.get("/api/v1/cluster/usage").json()
         assert "headline" in client.get("/api/v1/jobs/diagnosis").json()
 
+        overview = client.get("/api/v1/clusters").json()
+        assert overview["primary"] == "ariel"
+        assert set(overview["clusters"]) == {"ariel", "moana", "aurora"}
+        assert overview["clusters"]["ariel"]["connectable"] is True
+        assert overview["clusters"]["moana"]["connectable"] is False
+
 
 def test_queue_eta_and_history_apis():
     app = create_app()
