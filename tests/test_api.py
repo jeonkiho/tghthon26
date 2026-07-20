@@ -94,6 +94,17 @@ def test_tutorial_api():
         assert "sample_status" in body
 
 
+def test_announcements_api():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/announcements").json()
+        assert "ok" in body and "announcements" in body   # 실패해도 200 + 구조 유지
+        if body["ok"] and body["announcements"]:
+            first = body["announcements"][0]
+            for key in ("ts", "posted_at", "author", "text", "summary", "is_bot", "reply_count", "reactions"):
+                assert key in first
+
+
 def test_recommendation_and_preview_reuse_core():
     app = create_app()
     with TestClient(app) as client:

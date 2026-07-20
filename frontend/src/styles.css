@@ -106,3 +106,21 @@ button.hrow:hover{background:#f8fafc}
 .tut-pitfall{display:flex;gap:9px;align-items:flex-start;background:#fff7ea;border:1px solid #f3e0be;border-radius:9px;padding:11px 12px;margin:13px 0 0;color:#a5701c}
 .tut-pitfall svg{flex:none;margin-top:1px}
 .tut-pitfall p{font-size:10px;line-height:1.6;margin:0}
+
+/* --- 공지 탭 --- */
+.notices-page{max-width:840px}
+.notice-list{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+.notice-card{padding:16px 19px;border-left:3px solid transparent}
+.notice-card.urgent{border-left-color:#e25862}
+.notice-head{display:flex;align-items:center;gap:11px}
+.na-avatar{width:34px;height:34px;flex:none;border-radius:9px;background:#eef2f8;color:#5a6b8a;font-weight:700;font-size:13px;display:grid;place-items:center}
+.na-meta strong{font-size:11px;color:#28324a;display:flex;align-items:center;gap:7px}
+.na-meta small{font-size:8.5px;color:#9aa4b5;display:block;margin-top:3px}
+.bot-tag{font-style:normal;font-size:7px;font-weight:700;letter-spacing:.5px;background:#eef4ff;color:#3f63c9;border-radius:4px;padding:2px 5px}
+.notice-text{font-size:10.5px;color:#3f4a5f;line-height:1.7;white-space:pre-wrap;margin:12px 0 0}
+.notice-foot{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.reaction{font-size:8.5px;color:#66728a;background:#f2f4f8;border:1px solid #e7ebf2;border-radius:20px;padding:3px 9px}
+.replies{font-size:8.5px;color:#7c8799;background:#fff;border:1px solid #e7ebf2;border-radius:20px;padding:3px 9px}
+.notice-error{display:flex;gap:10px;align-items:flex-start;background:#fff7ea;border:1px solid #f3e0be;border-radius:10px;padding:13px 15px;margin-top:16px;color:#a5701c}
+.notice-error svg{flex:none;margin-top:1px}
+.notice-error p{font-size:10.5px;line-height:1.6;margin:0}

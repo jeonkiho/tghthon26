@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from seraph import config as config_module
-from seraph import history, placement, sbatch, services, tutorial
+from seraph import history, placement, sbatch, services, slack, tutorial
 
 from .cache import SnapshotCache
 from .dependencies import ConnectionManager
@@ -135,6 +135,14 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
         # 튜토리얼은 항상 mock 스냅샷 위에서 돈다(실서버 무관). SSH 연결 없이도 동작.
         result = await to_thread.run_sync(tutorial.get_tutorial)
         return {"ok": True, **result}
+
+    @app.get("/api/v1/announcements")
+    async def announcements_route() -> dict[str, Any]:
+        # Slack 공지는 세라프 SSH 와 무관하다(토큰 없으면 mock). 실패해도 예외를 던지지 않는다.
+        def _fetch() -> dict[str, Any]:
+            client = slack.connect(cfg)
+            return slack.get_announcements(client, cfg.slack_channel, cfg.slack_limit)
+        return await to_thread.run_sync(_fetch)
 
     @app.post("/api/v1/local/select-code")
     async def select_local_code(

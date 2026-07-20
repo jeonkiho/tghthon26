@@ -37,6 +37,7 @@ function Icon({ name, size = 20 }) {
     history: <><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3.5 2"/></>,
     warn: <><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></>,
     book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>,
+    bell: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -88,6 +89,7 @@ export default function App() {
   const [historyDays, setHistoryDays] = useState(7);
   const [historyJob, setHistoryJob] = useState(null);
   const [tutorial, setTutorial] = useState(null);
+  const [announcements, setAnnouncements] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [form, setForm] = useState(blankForm);
   const [recommendation, setRecommendation] = useState(null);
@@ -165,6 +167,13 @@ export default function App() {
   useEffect(() => {
     if (tab === "tutorial" && !tutorial) api("/api/v1/tutorial").then(setTutorial).catch(report);
   }, [tab, tutorial, report]);
+
+  const loadAnnouncements = useCallback(async () => {
+    try { setAnnouncements(await api("/api/v1/announcements")); } catch (err) { report(err); }
+  }, [report]);
+  useEffect(() => {
+    if (tab === "notices" && !announcements) loadAnnouncements();
+  }, [tab, announcements, loadAnnouncements]);
 
   const refreshJobStatus = useCallback(async (localId) => {
     try {
@@ -276,7 +285,7 @@ export default function App() {
   });
 
   const nav = [
-    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"],
+    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
   ];
   const visibleNodes = cluster?.nodes?.slice(0, 8) || nodes.slice(0, 8);
 
@@ -290,7 +299,7 @@ export default function App() {
 
     <main>
       <header>
-        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : tab === "history" ? "JOB HISTORY" : tab === "tutorial" ? "GUIDE" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : tab === "history" ? "완료 작업 이력" : tab === "tutorial" ? "세라프 사용법" : "내 작업"}</h1></div>
+        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : tab === "history" ? "JOB HISTORY" : tab === "tutorial" ? "GUIDE" : tab === "notices" ? "ANNOUNCEMENTS" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : tab === "history" ? "완료 작업 이력" : tab === "tutorial" ? "세라프 사용법" : tab === "notices" ? "공지사항" : "내 작업"}</h1></div>
         <div className="header-actions"><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading}><Icon name="refresh"/></button></div>
       </header>
 
@@ -386,6 +395,14 @@ export default function App() {
         <div className="welcome-strip"><div><span className="live-dot"/>PRACTICE</div><p>세라프 GPU 클러스터 사용 흐름입니다. 도구가 막아주지 못하는 주의사항까지 단계별로 안내합니다. (연습용 · 실서버에 영향 없음)</p></div>
         {!tutorial && <div className="empty-table"><Icon name="book" size={28}/><strong>튜토리얼을 불러오는 중…</strong></div>}
         {tutorial && <div className="tutorial-steps">{tutorial.steps.map((step, i) => <TutorialStep key={step.id} step={step} n={i + 1}/>)}</div>}
+      </section>}
+
+      {tab === "notices" && <section className="page notices-page">
+        <div className="welcome-strip"><div><span className="live-dot"/>SLACK · {announcements?.channel || "공지"}</div><p>{announcements?.ok === false ? "공지를 불러오지 못했습니다." : "관리자 공지입니다. 노드 점검·정책 변경 등을 확인하세요."}</p><button onClick={loadAnnouncements}>새로고침 <Icon name="refresh" size={15}/></button></div>
+        {!announcements && <div className="empty-table"><Icon name="bell" size={28}/><strong>공지를 불러오는 중…</strong></div>}
+        {announcements?.ok === false && <div className="notice-error"><Icon name="warn" size={18}/><p>{announcements.message || "Slack 공지를 읽지 못했습니다."}</p></div>}
+        {announcements?.announcements?.length > 0 && <div className="notice-list">{announcements.announcements.map((a) => <AnnouncementCard key={a.ts} a={a}/>)}</div>}
+        {announcements?.ok && !announcements.announcements?.length && <div className="empty-table"><Icon name="bell" size={28}/><strong>공지가 없습니다</strong><span>새 공지가 올라오면 여기에 표시됩니다.</span></div>}
       </section>}
     </main>
 
@@ -503,6 +520,17 @@ function HistoryTable({ jobs, onOpen, selectedId }) {
       <span className={`hreason ${j.succeeded ? "ok" : "bad"}`}>{j.succeeded ? "정상 종료" : j.reason_text}</span>
     </button>)}
   </div>;
+}
+
+function fmtNotice(iso) { if (!iso) return ""; const t = new Date(iso); return Number.isNaN(t.getTime()) ? iso : t.toLocaleString("ko-KR", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+
+function AnnouncementCard({ a }) {
+  const urgent = (a.text || "").includes("[긴급]");
+  return <article className={`panel notice-card ${urgent ? "urgent" : ""}`}>
+    <div className="notice-head"><span className="na-avatar">{(a.author || "?").slice(0, 1).toUpperCase()}</span><div className="na-meta"><strong>{a.author}{a.is_bot && <em className="bot-tag">BOT</em>}</strong><small>{fmtNotice(a.posted_at)}</small></div></div>
+    <p className="notice-text">{a.text}</p>
+    {(a.reactions?.length > 0 || a.reply_count > 0) && <div className="notice-foot">{a.reactions?.map((r) => <span className="reaction" key={r.name}>{r.name} · {r.count}</span>)}{a.reply_count > 0 && <span className="replies">답글 {a.reply_count}</span>}</div>}
+  </article>;
 }
 
 function TutorialStep({ step, n }) {
