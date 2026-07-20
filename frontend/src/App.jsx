@@ -34,6 +34,8 @@ function Icon({ name, size = 20 }) {
     spark: <><path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6zM19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/></>,
     close: <><path d="m6 6 12 12M18 6 6 18"/></>,
     server: <><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></>,
+    history: <><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3.5 2"/></>,
+    warn: <><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -81,6 +83,9 @@ export default function App() {
   const [diagnosis, setDiagnosis] = useState(null);
   const [queue, setQueue] = useState(null);
   const [history, setHistory] = useState([]);
+  const [jobHistory, setJobHistory] = useState(null);
+  const [historyDays, setHistoryDays] = useState(7);
+  const [historyJob, setHistoryJob] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [form, setForm] = useState(blankForm);
   const [recommendation, setRecommendation] = useState(null);
@@ -122,6 +127,14 @@ export default function App() {
     catch (err) { report(err); }
   }, [report]);
 
+  const loadHistory = useCallback(async (days) => {
+    // sacct 는 느리고 자주 바뀌지 않으므로 사용자가 요청할 때만 부른다(자동 폴링 없음).
+    setLoading(true); setError(null); setHistoryDays(days); setHistoryJob(null);
+    try { setJobHistory(await api(`/api/v1/jobs/history?days=${days}&limit=50`)); }
+    catch (err) { report(err); }
+    finally { setLoading(false); }
+  }, [report]);
+
   const initialize = useCallback(async () => {
     try {
       const data = await api("/api/v1/health"); setHealth(data);
@@ -144,6 +157,9 @@ export default function App() {
     const timer = window.setInterval(() => { loadDashboard(); }, DASHBOARD_POLL_MS);
     return () => window.clearInterval(timer);
   }, [health?.seraph_reachable, pageVisible, loadDashboard]);
+  useEffect(() => {
+    if (tab === "history" && health?.seraph_reachable && !jobHistory) loadHistory(historyDays);
+  }, [tab, health?.seraph_reachable, jobHistory, historyDays, loadHistory]);
 
   const refreshJobStatus = useCallback(async (localId) => {
     try {
@@ -255,7 +271,7 @@ export default function App() {
   });
 
   const nav = [
-    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"],
+    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"],
   ];
   const visibleNodes = cluster?.nodes?.slice(0, 8) || nodes.slice(0, 8);
 
@@ -269,7 +285,7 @@ export default function App() {
 
     <main>
       <header>
-        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : "내 작업"}</h1></div>
+        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : tab === "history" ? "JOB HISTORY" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : tab === "history" ? "완료 작업 이력" : "내 작업"}</h1></div>
         <div className="header-actions"><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading}><Icon name="refresh"/></button></div>
       </header>
 
@@ -342,6 +358,23 @@ export default function App() {
       {tab === "jobs" && <section className="page jobs-page">
         <article className="panel jobs-panel"><div className="panel-head"><div><p className="eyebrow">SLURM JOBS</p><h2>작업별 실행 상태</h2></div><button className="secondary compact" onClick={loadJobs}><Icon name="refresh" size={16}/> 새로고침</button></div><JobTable jobs={jobs} onOpen={openJob}/></article>
         {selected && <div className="job-drawer"><div className="drawer-head"><div><p className="eyebrow">JOB DETAIL</p><h2>{selected.job.job_name}</h2></div><button onClick={() => setSelected(null)}><Icon name="close"/></button></div><div className="drawer-status"><StatusPill status={selected.job.status}/><span>Slurm #{selected.job.slurm_job_id || "미제출"}</span></div><dl className="detail-grid"><div><dt>파티션</dt><dd>{selected.job.partition}</dd></div><div><dt>노드</dt><dd>{selected.job.node || "자동"}</dd></div><div><dt>GPU</dt><dd>{selected.job.gpus}개</dd></div><div><dt>시간 제한</dt><dd>{selected.job.time_limit}</dd></div><div className="wide"><dt>데이터</dt><dd>{selected.job.dataset_path}</dd></div><div className="wide"><dt>결과</dt><dd>{selected.job.output_path}</dd></div></dl><div className="log-tabs"><span><Icon name="terminal" size={17}/> stdout · 수동 갱신</span><div><button onClick={() => refreshJobLogs(selected.job.local_job_id)}><Icon name="refresh" size={15}/> 로그 갱신</button><button onClick={() => navigator.clipboard.writeText(logs?.stdout || "")}><Icon name="copy" size={15}/> 복사</button></div></div><pre className="logs">{logs?.stdout || "아직 출력 로그가 없습니다."}{logs?.stderr ? `\n\n[stderr]\n${logs.stderr}` : ""}</pre>{ACTIVE.has(selected.job.status) && selected.job.slurm_job_id && <button className="danger-button" onClick={() => cancel(selected.job.local_job_id)}>작업 취소</button>}</div>}
+      </section>}
+
+      {tab === "history" && <section className="page history-page">
+        <div className="welcome-strip history-strip"><div><span className="live-dot"/>SACCT · {historyDays}일</div><p>{jobHistory?.headline || "기간을 선택하면 완료된 작업 이력을 조회합니다."}</p><div className="history-controls">{[1,7,30,60].map((d) => <button key={d} className={d === historyDays ? "on" : ""} onClick={() => loadHistory(d)}>{d}일</button>)}<button className="hs-refresh" onClick={() => loadHistory(historyDays)} title="다시 불러오기"><Icon name="refresh" size={15}/></button></div></div>
+        {jobHistory && <div className="metrics history-stats">
+          <Metric icon="check" label="성공률" value={`${Math.round(jobHistory.stats.success_rate * 100)}%`} detail={`${jobHistory.stats.total}개 중 ${jobHistory.stats.succeeded}개 성공`} accent="mint"/>
+          <Metric icon="close" label="실패한 작업" value={jobHistory.stats.failed} detail={`전체 ${jobHistory.stats.total}개`} accent="violet"/>
+          <Metric icon="warn" label="낭비된 GPU 시간" value={`${jobHistory.stats.wasted_gpu_hours}h`} detail="실패 작업이 태운 시간" accent="amber"/>
+          <Metric icon="gpu" label="총 GPU 시간" value={`${jobHistory.stats.total_gpu_hours}h`} detail="완료 작업 합계" accent="blue"/>
+        </div>}
+        {jobHistory && <article className="panel history-panel">
+          <div className="panel-head"><div><p className="eyebrow">OUTCOMES</p><h2>상태 분포 · 작업별 결과</h2></div><span>최근 {historyDays}일 · 최대 50개</span></div>
+          <StateBreakdown byState={jobHistory.stats.by_state} total={jobHistory.stats.total}/>
+          <HistoryTable jobs={jobHistory.jobs} onOpen={setHistoryJob} selectedId={historyJob?.job_id}/>
+        </article>}
+        {!jobHistory && !loading && <div className="empty-table"><Icon name="history" size={28}/><strong>이력을 불러오세요</strong><span>위에서 기간을 선택하면 완료된 작업을 조회합니다.</span></div>}
+        {historyJob && <HistoryDetail job={historyJob} onClose={() => setHistoryJob(null)}/>}
       </section>}
     </main>
 
@@ -427,5 +460,56 @@ function TrendChart({ samples }) {
       <path d={line} fill="none" stroke="#17ac82" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/>
       <circle cx={x(n - 1)} cy={y(util[n - 1])} r="3.4" fill="#17ac82" vectorEffect="non-scaling-stroke"/>
     </svg>
+  </div>;
+}
+
+const STATE_COLOR = { COMPLETED: "#23bd91", FAILED: "#df5965", TIMEOUT: "#e9a23b", OUT_OF_MEMORY: "#e07a4b", CANCELLED: "#8b96a7" };
+const STATE_LABEL = { COMPLETED: "완료", FAILED: "실패", TIMEOUT: "시간초과", OUT_OF_MEMORY: "메모리부족", CANCELLED: "취소" };
+function stateLabel(st) { return STATE_LABEL[(st || "").toUpperCase()] || st; }
+function formatDuration(s) { if (s == null) return "무제한"; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); if (h) return `${h}시간 ${m}분`; if (m) return `${m}분`; return `${s}초`; }
+function formatMB(mb) { if (mb == null) return "—"; return mb < 1024 ? `${mb}MB` : `${(mb / 1024).toFixed(1)}GB`; }
+function fmtTime(iso) { if (!iso) return "—"; const t = new Date(iso); return Number.isNaN(t.getTime()) ? iso : t.toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }
+
+function StateBreakdown({ byState, total }) {
+  const entries = Object.entries(byState || {}).sort((a, b) => b[1] - a[1]);
+  if (!total) return null;
+  return <div className="state-breakdown">
+    <div className="sb-bar">{entries.map(([st, n]) => <i key={st} style={{ width: `${n / total * 100}%`, background: STATE_COLOR[st] || "#b6c1d1" }} title={`${stateLabel(st)} ${n}`}/>)}</div>
+    <div className="sb-legend">{entries.map(([st, n]) => <span key={st}><b style={{ background: STATE_COLOR[st] || "#b6c1d1" }}/>{stateLabel(st)} {n}</span>)}</div>
+  </div>;
+}
+
+function HistoryTable({ jobs, onOpen, selectedId }) {
+  if (!jobs.length) return <div className="empty-mini"><Icon name="history" size={20}/><span>해당 기간에 완료된 작업이 없습니다.</span></div>;
+  return <div className="history-table">
+    <div className="hrow hhead"><span>작업</span><span>상태</span><span>파티션 · 노드</span><span>GPU</span><span>실행 시간</span><span>원인</span></div>
+    {jobs.map((j) => <button key={j.job_id} className={`hrow ${selectedId === j.job_id ? "sel" : ""} ${j.succeeded ? "" : "isfail"}`} onClick={() => onOpen(j)}>
+      <span className="hname"><strong>{j.name}</strong><small>#{j.job_id}</small></span>
+      <StatusPill status={j.state}/>
+      <span className="hpart">{j.partition}<small>{j.nodes || "—"}</small></span>
+      <span>{j.gpus}{j.high_perf_gpus ? " · 고성능" : ""}</span>
+      <span className="hela">{formatDuration(j.elapsed_seconds)}</span>
+      <span className={`hreason ${j.succeeded ? "ok" : "bad"}`}>{j.succeeded ? "정상 종료" : j.reason_text}</span>
+    </button>)}
+  </div>;
+}
+
+function HistoryDetail({ job, onClose }) {
+  const memPct = job.req_mem_mb && job.max_rss_mb != null ? Math.min(100, Math.round(job.max_rss_mb / job.req_mem_mb * 100)) : null;
+  return <div className="job-drawer">
+    <div className="drawer-head"><div><p className="eyebrow">JOB RESULT</p><h2>{job.name}</h2></div><button onClick={onClose}><Icon name="close"/></button></div>
+    <div className="drawer-status"><StatusPill status={job.state}/><span>Slurm #{job.job_id}</span></div>
+    <div className={`history-advice ${job.succeeded ? "ok" : "bad"}`}><Icon name={job.succeeded ? "check" : "warn"} size={18}/><p>{job.succeeded ? "정상적으로 완료되었습니다." : (job.advice || job.reason_text)}</p></div>
+    {memPct != null && <div className="mem-block"><div className="mem-head"><span>메모리 사용 (MaxRSS / 요청)</span><strong className={memPct >= 90 ? "danger" : ""}>{memPct}%</strong></div><div className="mem-bar"><i className={memPct >= 90 ? "danger" : ""} style={{ width: `${memPct}%` }}/></div><div className="mem-sub">{formatMB(job.max_rss_mb)} / {formatMB(job.req_mem_mb)}</div></div>}
+    <dl className="detail-grid">
+      <div><dt>상태(원문)</dt><dd>{job.raw_state}</dd></div>
+      <div><dt>원인</dt><dd>{job.reason_text}</dd></div>
+      <div><dt>GPU</dt><dd>{job.gpus}개{job.high_perf_gpus ? ` (고성능 ${job.high_perf_gpus})` : ""}</dd></div>
+      <div><dt>파티션 · 노드</dt><dd>{job.partition} · {job.nodes || "—"}</dd></div>
+      <div><dt>실행 시간</dt><dd>{formatDuration(job.elapsed_seconds)} / 제한 {formatDuration(job.time_limit_seconds)}</dd></div>
+      <div><dt>종료 코드</dt><dd>{job.exit_code}{job.signal ? ` · signal ${job.signal}` : ""}</dd></div>
+      <div className="wide"><dt>시작 → 종료</dt><dd>{fmtTime(job.start)} → {fmtTime(job.end)}</dd></div>
+      {job.cancelled_by && <div className="wide"><dt>취소 주체</dt><dd>{job.cancelled_by}</dd></div>}
+    </dl>
   </div>;
 }
