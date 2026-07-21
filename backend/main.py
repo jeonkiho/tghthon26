@@ -125,6 +125,12 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
             )
         return {"ok": True, "mode": manager.mode, "me": identity}
 
+    @app.post("/api/v1/session/disconnect")
+    async def disconnect_session() -> dict[str, Any]:
+        await to_thread.run_sync(manager.close)
+        cache.invalidate()
+        return {"ok": True, "mode": manager.mode, "seraph_reachable": manager.connected}
+
     @app.get("/api/v1/me")
     async def me() -> dict[str, Any]:
         snapshot, cache_meta = await cached_snapshot()

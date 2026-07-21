@@ -52,6 +52,10 @@ def test_health_and_dashboard_apis():
         assert "gpus_in_use" in client.get("/api/v1/cluster/usage").json()
         assert "headline" in client.get("/api/v1/jobs/diagnosis").json()
 
+        disconnected = client.post("/api/v1/session/disconnect").json()
+        assert disconnected["ok"] is True
+        assert disconnected["seraph_reachable"] is False
+
         overview = client.get("/api/v1/clusters").json()
         assert overview["primary"] == "ariel"
         assert set(overview["clusters"]) == {"ariel", "moana", "aurora"}

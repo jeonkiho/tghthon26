@@ -20,7 +20,10 @@ REASON_TEXT = {
     'Resources': '클러스터에 여유 GPU 부족',
     'Priority': '우선순위가 높은 다른 job 이 먼저 대기 중',
     'Dependency': '먼저 끝나야 하는 job 이 있음',
+    'DependencyNeverSatisfied': '의존하는 job 이 실패·취소되어 시작될 수 없음 (취소 필요)',
     'ReqNodeNotAvail': '요청한 노드를 지금 쓸 수 없음',
+    'QOSMaxJobsPerUserLimit': '동시 실행 job 한도 초과',
+    'AssocMaxJobsLimit': '계정 동시 실행 한도 초과',
     'None': '',
 }
 

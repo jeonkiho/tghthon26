@@ -38,6 +38,7 @@ function Icon({ name, size = 20 }) {
     warn: <><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></>,
     book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>,
     bell: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
+    logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -287,10 +288,19 @@ export default function App() {
     await api("/api/v1/cluster/refresh", { method: "POST" }); await Promise.all([loadDashboard(), loadJobs()]);
   });
 
+  const disconnect = () => runAction(async () => {
+    if (!window.confirm("SERAPH 연결을 해제할까요? (다시 접속하려면 비밀번호를 입력해야 합니다)")) return;
+    await api("/api/v1/session/disconnect", { method: "POST" });
+    setSelected(null); setMe(null); setCluster(null); setQueue(null);
+    setJobHistory(null); setTutorial(null); setAnnouncements(null);
+    await initialize();   // health 재조회 -> 미연결 -> 연결 화면 표시
+  });
+
   const nav = [
     ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
   ];
   const visibleNodes = cluster?.nodes?.slice(0, 8) || nodes.slice(0, 8);
+  const hostOptions = clusterInfo ? Object.values(clusterInfo.clusters).map((c) => ({ host: c.host, name: c.name })) : [];
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -303,7 +313,7 @@ export default function App() {
     <main>
       <header>
         <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : tab === "history" ? "JOB HISTORY" : tab === "tutorial" ? "GUIDE" : tab === "notices" ? "ANNOUNCEMENTS" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : tab === "history" ? "완료 작업 이력" : tab === "tutorial" ? "세라프 사용법" : tab === "notices" ? "공지사항" : "내 작업"}</h1></div>
-        <div className="header-actions"><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading}><Icon name="refresh"/></button></div>
+        <div className="header-actions"><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading} title="새로고침"><Icon name="refresh"/></button>{health?.seraph_reachable && health?.mode === "ssh" && <button className="icon-button" onClick={disconnect} disabled={loading} title="로그아웃 (연결 해제)"><Icon name="logout"/></button>}</div>
       </header>
 
       {tab === "dashboard" && <section className="page dashboard-page">
@@ -420,7 +430,7 @@ export default function App() {
       </section>}
     </main>
 
-    {health && !health.seraph_reachable && <div className="connect-overlay"><div className="connect-card"><div className="connect-logo"><Icon name="server" size={30}/></div><p className="eyebrow">SERAPH CONNECTION</p><h2>서버 연결이 필요합니다</h2><p>입력한 사용자명은 SSH 로그인과 <code>/data/사용자명</code> 작업 경로에 사용합니다. 비밀번호는 저장하지 않습니다.</p>{health.mode === "ssh" && <><input autoComplete="username" placeholder="SERAPH 사용자명" value={sshUsername} onChange={(e) => setSshUsername(e.target.value)}/><div className="connect-endpoint"><input placeholder="호스트" value={sshHost} onChange={(e) => setSshHost(e.target.value)}/><input type="number" min="1" max="65535" placeholder="포트" value={sshPort} onChange={(e) => setSshPort(e.target.value)}/></div><input type="password" autoComplete="off" placeholder="SSH 비밀번호 (키 인증이면 비워 두기)" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && connect()}/></>}<button className="primary full" onClick={connect} disabled={loading || (health.mode === "ssh" && (!sshUsername || !sshHost || !sshPort))}>{loading ? "연결 중…" : "SERAPH 연결"}</button></div></div>}
+    {health && !health.seraph_reachable && <div className="connect-overlay"><div className="connect-card"><div className="connect-logo"><Icon name="server" size={30}/></div><p className="eyebrow">SERAPH CONNECTION</p><h2>서버 연결이 필요합니다</h2><p>입력한 사용자명은 SSH 로그인과 <code>/data/사용자명</code> 작업 경로에 사용합니다. 비밀번호는 저장하지 않습니다.</p>{health.mode === "ssh" && <><input autoComplete="username" placeholder="SERAPH 사용자명" value={sshUsername} onChange={(e) => setSshUsername(e.target.value)}/><div className="connect-endpoint"><select value={sshHost} onChange={(e) => setSshHost(e.target.value)}>{hostOptions.map((o) => <option key={o.host} value={o.host}>{o.name} · {o.host}</option>)}{sshHost && !hostOptions.some((o) => o.host === sshHost) && <option value={sshHost}>{sshHost}</option>}</select><input type="number" min="1" max="65535" placeholder="포트" value={sshPort} onChange={(e) => setSshPort(e.target.value)}/></div><input type="password" autoComplete="off" placeholder="SSH 비밀번호 (키 인증이면 비워 두기)" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && connect()}/></>}<button className="primary full" onClick={connect} disabled={loading || (health.mode === "ssh" && (!sshUsername || !sshHost || !sshPort))}>{loading ? "연결 중…" : "SERAPH 연결"}</button></div></div>}
     {loading && <div className="loading-line"/>}
     <ErrorToast error={error} onClose={() => setError(null)}/>
   </div>;
@@ -708,7 +718,7 @@ function TutorialTerminal({ steps, user }) {
         <div className="tut-guide-eyebrow">STEP {stepIdx + 1} / {TERM_TASKS.length}</div>
         <h3 className="tut-guide-title">{task.label}</h3>
         <p className="tut-guide-hint">{task.hint}</p>
-        <div className="tut-guide-cmd"><code>{task.answer}</code><button onClick={() => setInput(task.answer)} title="입력창에 넣기"><Icon name="copy" size={13}/></button></div>
+        <div className="tut-guide-cmd"><code onClick={() => { if (!busy) run(task.answer); }} title="터미널에서 바로 실행 (자동 입력 + 엔터)">{task.answer}</code><button onClick={() => navigator.clipboard.writeText(task.answer)} title="클립보드에 복사"><Icon name="copy" size={13}/></button></div>
         {relStep?.pitfall && <div className="tut-guide-pitfall"><Icon name="warn" size={14}/><p>{relStep.pitfall}</p></div>}
       </> : <div className="tut-guide-done"><div className="tgd-badge"><Icon name="check" size={22}/></div><strong>실습 완료!</strong><p>기본 명령을 다 익혔습니다. 이제 '새 작업' 탭에서 실제로 학습을 제출해 보세요.</p></div>}
       <ol className="tut-guide-steps">{TERM_TASKS.map((t, i) => <li key={t.id} className={i < stepIdx ? "done" : i === stepIdx ? "active" : ""}><span className="tgs-ck">{i < stepIdx ? "✓" : i + 1}</span>{t.label}</li>)}</ol>
