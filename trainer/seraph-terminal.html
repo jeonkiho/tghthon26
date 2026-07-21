@@ -407,43 +407,64 @@
    ========================================================================== */
 
 /* ---------- 클러스터 토폴로지 (튜토리얼 1, 슬라이드 7 기준) ---------- */
-function gpuNodes(prefix, spec){ // spec: [{p:'r',n:5,model,mem,g}, ...]
+function gpuNodes(prefix, spec){ // spec: [{p:'r',n:5,model,mem,g,hp,ex}, ...]  hp: 고성능 노드 여부
   const out=[];
   spec.forEach(s=>{ for(let i=1;i<=s.n;i++){ const ex=(s.ex&&s.ex[i])||{}; out.push({
-    name:`${prefix}-${s.p}${i}`, type:'gpu', model:ex.model||s.model, mem:s.mem, gpus:ex.g||s.g }); } });
+    name:`${prefix}-${s.p}${i}`, type:'gpu', model:ex.model||s.model, mem:ex.mem!=null?ex.mem:s.mem,
+    gpus:ex.g!=null?ex.g:s.g, hp:!!(ex.hp!=null?ex.hp:s.hp) }); } });
   return out;
 }
+// 실서버(seraph/clusters.py) 기준 토폴로지.
+//   ariel : ariel-v[1-13], g[1-5], k[1-2], m[1-2], n1   총 182 GPU  (AI 학부 + 모든 대학원생)
+//   moana : moana-y[1-7], r[1-5], u[1-8]                총 121 GPU  (CE·EE·BME 학부)
+//   aurora: aurora-g[1-8]                               총 62 GPU   (SWCON 학부)
+// 노드 이름과 클러스터별 총 GPU 수는 실데이터다. 노드별 세부 GPU 개수는 실서버가
+// 공개하지 않으므로(우리 도구는 ariel 만 접속) 총합이 맞도록 추정해 배분했다.
+// k/m/n 은 실서버에서 '고성능(high_perf)' 노드로, 따로 신청한 사람만 쓴다(hp:true).
 const CLUSTERS = {
   ariel:{ label:'ariel', master:'ariel-master', repNode:'ariel-v7',
     nodes:[ {name:'ariel-master',type:'master'},{name:'ariel-NAS',type:'nas'},
-      ...gpuNodes('ariel',[{p:'g',n:5,model:'RTX 3090',mem:24,g:8},
-        {p:'v',n:13,model:'RTX A5000',mem:24,g:8,ex:{10:{g:2},13:{g:4}}}]) ],
-    partitions:['debug_ce_ugrad','batch_ce_ugrad','debug_grad','batch_grad'] },
-  moana:{ label:'moana', master:'moana-master', repNode:'moana-y4',
+      ...gpuNodes('ariel',[{p:'g',n:5,model:'RTX 3090',mem:24,g:8},          // 40
+        {p:'v',n:13,model:'RTX A5000',mem:24,g:8},                           // 104
+        {p:'k',n:2,model:'RTX A6000',mem:48,g:8,hp:true},                    // 16 (고성능)
+        {p:'m',n:2,model:'RTX A6000',mem:48,g:8,hp:true,ex:{1:{g:7}}},       // 15 (m1: 1개 고장)
+        {p:'n',n:1,model:'A100',mem:80,g:7,hp:true}]) ],                     // 7  → 총 182
+    partitions:['debug_ugrad','batch_ugrad','debug_grad','batch_grad'] },
+  moana:{ label:'moana', master:'moana-master', repNode:'moana-r1',
     nodes:[ {name:'moana-master',type:'master'},{name:'moana-NAS',type:'nas'},
-      ...gpuNodes('moana',[{p:'r',n:5,model:'RTX 3090',mem:24,g:8},{p:'y',n:7,model:'RTX 3090',mem:24,g:4}]) ],
-    partitions:['debug_eebme_ugrad','batch_eebme_ugrad','debug_grad','batch_grad'] },
+      ...gpuNodes('moana',[{p:'r',n:5,model:'RTX 3090',mem:24,g:8},          // 40
+        {p:'u',n:8,model:'RTX 2080 Ti',mem:11,g:4},                          // 32
+        {p:'y',n:7,model:'RTX 3090',mem:24,g:7}]) ],                         // 49 → 총 121
+    partitions:['debug_ce_ugrad','batch_ce_ugrad','debug_eebme_ugrad','batch_eebme_ugrad'] },
   aurora:{ label:'aurora', master:'aurora-master', repNode:'aurora-g3',
     nodes:[ {name:'aurora-master',type:'master'},{name:'aurora-NAS',type:'nas'},
-      ...gpuNodes('aurora',[{p:'g',n:8,model:'RTX 3090',mem:24,g:8,ex:{7:{g:6}}}]) ],
-    partitions:['debug_ugrad','batch_ugrad','debug_grad','batch_grad'] },
+      ...gpuNodes('aurora',[{p:'g',n:8,model:'RTX 3090',mem:24,g:8,ex:{7:{g:6}}}]) ], // 62
+    partitions:['debug_swcon_ugrad','batch_swcon_ugrad'] },
 };
-const ALL_PARTS = ['debug_ugrad','batch_ugrad','debug_grad','batch_grad','debug_ce_ugrad','batch_ce_ugrad','debug_eebme_ugrad','batch_eebme_ugrad'];
+const ALL_PARTS = ['debug_grad','batch_grad','debug_ugrad','batch_ugrad','debug_ce_ugrad','batch_ce_ugrad','debug_eebme_ugrad','batch_eebme_ugrad','debug_swcon_ugrad','batch_swcon_ugrad'];
 
-// 학과 → 클러스터 배정 정책 (튜토리얼 1 'Cluster Assignment Policy' 기준)
+// 학과 × 신분 → 클러스터 배정 (실서버 seraph/clusters.py 의 _ROUTING 기준).
+//   CE·EE·BME 학부 → moana · AI 학부 → ariel · SWCON 학부 → aurora
+//   대학원생(석/박/교수)은 학과와 무관하게 전부 ariel.
+// ugAccount/ugPart 는 실서버 계정·파티션 규칙(seraph/placement.py partition_from_account).
 const DEPTS = {
-  CE:   { label:'컴퓨터공학과',        short:'CE',    cluster:'ariel'  },
-  SWCON:{ label:'소프트웨어융합학과',  short:'SWCON', cluster:'aurora' },
-  AI:   { label:'인공지능학과',        short:'AI',    cluster:'aurora' },
-  EE:   { label:'전자공학과',          short:'EE',    cluster:'moana'  },
-  BME:  { label:'생체의공학과',        short:'BME',   cluster:'moana'  },
+  CE:   { label:'컴퓨터공학과',        short:'CE',    cluster:'moana',  ugPart:'ce_ugrad',    ugAccount:'ugrad_ce' },
+  SWCON:{ label:'소프트웨어융합학과',  short:'SWCON', cluster:'aurora', ugPart:'swcon_ugrad', ugAccount:'ugrad_swcon' },
+  AI:   { label:'인공지능학과',        short:'AI',    cluster:'ariel',  ugPart:'ugrad',       ugAccount:'ugrad' },
+  EE:   { label:'전자공학과',          short:'EE',    cluster:'moana',  ugPart:'eebme_ugrad', ugAccount:'ugrad_eebme' },
+  BME:  { label:'생체의공학과',        short:'BME',   cluster:'moana',  ugPart:'eebme_ugrad', ugAccount:'ugrad_eebme' },
 };
 function profileFor(major, position){
-  const d=DEPTS[major]||DEPTS.CE; const cl=CLUSTERS[d.cluster]; const grad=(position==='grad');
-  const debugPart = grad ? 'debug_grad' : (cl.partitions.find(p=>p.startsWith('debug')&&p!=='debug_grad')||cl.partitions[0]);
-  const batchPart = grad ? 'batch_grad' : (cl.partitions.find(p=>p.startsWith('batch')&&p!=='batch_grad')||cl.partitions[1]);
-  return { major, position, deptLabel:d.label, deptShort:d.short, cluster:d.cluster,
-           master:cl.master, node:cl.repNode, debugPart, batchPart };
+  const d=DEPTS[major]||DEPTS.CE; const grad=(position==='grad');
+  // 대학원생은 학과 무관 전부 ariel · QOS grad · 계정 grad
+  const cluster = grad ? 'ariel' : d.cluster;
+  const cl=CLUSTERS[cluster];
+  const debugPart = grad ? 'debug_grad' : `debug_${d.ugPart}`;
+  const batchPart = grad ? 'batch_grad' : `batch_${d.ugPart}`;
+  const account   = grad ? 'grad' : d.ugAccount;
+  const qos       = grad ? 'grad' : 'ugrad';
+  return { major, position, deptLabel:d.label, deptShort:d.short, cluster,
+           master:cl.master, node:cl.repNode, debugPart, batchPart, account, qos };
 }
 function usernameFromEmail(email){ const u=(email||'').split('@')[0].toLowerCase().replace(/[^a-z0-9._-]/g,''); return u||'student'; }
 
@@ -524,7 +545,7 @@ function tpl(str){ if(str==null) return str; const p=(S&&S.profile)||{}; const u
 
 function curHostLabel(){ return S.host==='local' ? 'local' : S.host; }
 function isMaster(){ return S.host.endsWith('-master'); }
-function isGpu(){ return /-([rvgy])\d+$/.test(S.host); }
+function isGpu(){ return /-[a-z]\d+$/i.test(S.host); }  // ariel-v/g/k/m/n · moana-r/u/y · aurora-g
 function condaOf(host){ if(!S.conda[host]) S.conda[host]={inited:false,active:false}; return S.conda[host]; }
 function bashrcOf(host){ if(S.bashrc[host]==null) S.bashrc[host]=defaultBashrc(); return S.bashrc[host]; }
 
@@ -1062,15 +1083,24 @@ function localGuard(name){ if(S.host==='local'){ out(`<span class="c-err">${name
 /* ----- Slurm: slurm-gres-viz ----- */
 def(['slurm-gres-viz'],(a)=>{
   if(localGuard('slurm-gres-viz')) return false;
-  const cl=CLUSTERS[S.cluster]; out(`<span class="c-acc b">GPU 자원 현황 — cluster: ${cl.label}</span>`);
-  out('node          GPU model     used/total   ' , 'c-dim');
-  cl.nodes.filter(n=>n.type==='gpu').forEach(n=>{
-    const used=gpuUsed(n.name), total=n.gpus;
-    let bar=''; for(let i=0;i<total;i++) bar+= i<used?'<span class="blk-u">▓</span>':'<span class="blk-f">░</span>';
-    const free=total-used; const col=free===0?'c-err':free<=2?'c-warn':'c-ok';
-    out(`${n.name.padEnd(13)} ${n.model.padEnd(12)} <span class="${col}">${used}/${total}</span>   ${bar}`);
+  const cl=CLUSTERS[S.cluster];
+  const gpus=cl.nodes.filter(n=>n.type==='gpu');
+  let tot=0, used=0, hpTot=0, hpFree=0;
+  gpus.forEach(n=>{ const u=gpuUsed(n.name); tot+=n.gpus; used+=u; if(n.hp){ hpTot+=n.gpus; hpFree+=(n.gpus-u); } });
+  const free=tot-used, stdFree=free-hpFree;
+  out(`<span class="c-acc b">GPU 현황 · ${cl.label}</span>`);
+  out(`  사용 가능 <span class="c-ok">${free}</span> / 전체 ${tot}  (고성능 ${hpFree} · 일반 ${stdFree})`);
+  out('&nbsp;');
+  out(' 노드          모델           가용/전체', 'c-dim');
+  gpus.forEach(n=>{
+    const u=gpuUsed(n.name), total=n.gpus, fr=total-u;
+    // ▓ = 사용가능(가용), ░ = 사용중. GUI(App.jsx)와 동일하게 ▓ 개수가 '가용' 숫자와 일치한다.
+    let bar=''; for(let i=0;i<total;i++) bar+= i<fr?'<span class="c-ok">▓</span>':'<span class="blk-f">░</span>';
+    const col=fr===0?'c-err':fr<=2?'c-warn':'c-ok';
+    const tag=n.hp?'<span class="c-dim"> ·고성능</span>':'';
+    out(`  ${n.name.padEnd(12)} ${n.model.padEnd(13)} <span class="${col}">${String(fr).padStart(2)}/${total}</span>  ${bar}${tag}`);
   });
-  out('&nbsp;'); out('▓ 사용중  ░ 사용가능  ·  -i: interactive(1회 스냅샷)','c-dim');
+  out('&nbsp;'); out('▓ 사용가능  ░ 사용중  ·  고성능(k/m/n)은 별도 신청자만 · -i: interactive(1회 스냅샷)','c-dim');
 });
 function gpuUsed(name){ const total=nodeInfo(name).gpus; let base=S.gpuUse[name]; if(base==null){ base=seededUse(name,total); S.gpuUse[name]=base; }
   // 내 srun/sbatch 잡이 이 노드를 쓰면 가산
@@ -1246,19 +1276,36 @@ def('sinfo',()=>{
 });
 def(['show-qos'],()=>{
   if(localGuard('show-qos')) return false;
-  out('      Name   MaxWall  MaxJobsPU  MaxSubmitPU        MaxTRESPU','c-dim');
-  out('     debug   4:00:00          1            2   cpu=16,gres/gpu=1');
-  out('     batch  6-00:00:0          4            8  cpu=64,gres/gpu=4');
-  out('&nbsp;'); out('MaxJobsPU: 동시에 실행 가능한 잡 수 · MaxSubmitPU: 제출(실행+대기) 가능 수','c-dim');
-  out('MaxTRESPU: 사용자별 최대 자원 · MaxWall: 최대 실행 시간','c-dim');
+  // 실서버 값(seraph/parsers/qos.py 관측): 학부(ugrad)=GPU 1, 대학원(grad)=GPU 4, 둘 다 고성능 0.
+  const rows=[
+    { name:'grad',  tres:'gres/gpu:high_perf=0,gres/gpu=4', jobs:10, submit:20 },
+    { name:'ugrad', tres:'gres/gpu:high_perf=0,gres/gpu=1', jobs:2,  submit:10 },
+  ];
+  const mine=(S.profile&&S.profile.qos)||'ugrad';
+  const fmt=(n,t,j,s)=>`  ${String(n).padEnd(7)}${String(t).padEnd(34)}${String(j).padStart(9)}${String(s).padStart(13)}`;
+  out(esc(fmt('Name','MaxTRESPerUser','MaxJobsPU','MaxSubmitPU')),'c-dim');
+  rows.forEach(r=>{
+    const line=fmt(r.name,r.tres,r.jobs,r.submit);
+    out(r.name===mine?`<span class="c-acc">${esc(line)}</span>`:esc(line));
+  });
+  out('&nbsp;');
+  const m=rows.find(r=>r.name===mine)||rows[1];
+  const gpu=m.tres.match(/gres\/gpu=(\d+)/)[1];
+  out(`내 QOS: <span class="c-acc">${esc(mine)}</span> — GPU <b>${gpu}</b>개까지 · 고성능 노드(k/m/n) <b>불가</b>(high_perf=0) · 동시 실행 ${m.jobs} / 제출 ${m.submit}`,'c-dim');
+  out('세라프 대기의 대부분은 GPU 부족이 아니라 이 QOS 한도 때문입니다.','c-dim');
 });
 def(['show-assoc'],()=>{
   if(localGuard('show-assoc')) return false;
-  const p=S.profile||{}; const dp=p.debugPart||'debug_ce_ugrad'; const bp=p.batchPart||'batch_ce_ugrad';
-  const acc=dp.replace(/^debug_/,'');
-  out('  User        Account          Partition           QOS','c-dim');
-  out(`  ${S.user.padEnd(10).slice(0,10)}  ${acc.padEnd(16)}  ${dp.padEnd(18)}  debug`);
-  out(`  ${S.user.padEnd(10).slice(0,10)}  ${acc.padEnd(16)}  ${bp.padEnd(18)}  batch`);
+  // 실서버 명령: sacctmgr show assoc user=$USER format=User,Account,QOS  (seraph/commands.py)
+  const p=S.profile||{};
+  const account=p.account||'ugrad_ce';
+  const qos=p.qos||'ugrad';
+  const fmt=(u,a,q)=>`  ${String(u).padEnd(12)}${String(a).padEnd(18)}${String(q)}`;
+  out(esc(fmt('User','Account','QOS')),'c-dim');
+  out(esc(fmt(S.user.slice(0,11),account,qos)));
+  out('&nbsp;');
+  out(`계정 <span class="c-acc">${esc(account)}</span> → 파티션 <span class="c-acc">${esc(p.batchPart||'batch_ce_ugrad')}</span>(sbatch) · <span class="c-acc">${esc(p.debugPart||'debug_ce_ugrad')}</span>(srun)`,'c-dim');
+  out('계정(Account)이 학부/대학원·학과·클러스터를 결정합니다. 친구 설정을 그대로 복사하지 마세요.','c-dim');
 });
 
 /* ----- help / man ----- */
@@ -1608,7 +1655,8 @@ function renderProfileBadge(){
 
 function showLogin(){
   const sel=$('liMajor');
-  sel.innerHTML=Object.keys(DEPTS).map(k=>`<option value="${k}">${esc(DEPTS[k].label)} (${DEPTS[k].short}) — ${DEPTS[k].cluster}</option>`).join('');
+  // 배정 클러스터는 신분(학부/대학원)에 따라 달라지므로 옵션에 고정 표기하지 않는다(아래 미리보기에서 동적으로 안내).
+  sel.innerHTML=Object.keys(DEPTS).map(k=>`<option value="${k}">${esc(DEPTS[k].label)} (${DEPTS[k].short})</option>`).join('');
   // 저장된 값 복원
   const saved=loadProfileLS();
   const email=$('liEmail'); email.value=saved?saved.email:'';

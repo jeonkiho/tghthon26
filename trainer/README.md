@@ -16,8 +16,10 @@ python -m http.server -d trainer 8080   # → http://localhost:8080/seraph-termi
 ## 무엇을 하나
 
 - **로그인/자동 배정**: 경희대 이메일(`@khu.ac.kr`) + 학과 선택 → 학과별 클러스터·파티션 자동 배정
-  - CE → `ariel` (`debug_ce_ugrad`), EE/BME → `moana` (`debug_eebme_ugrad`), SWCON/AI → `aurora` (`debug_ugrad`)
-  - 대학원생 선택 시 `debug_grad`/`batch_grad`
+  (실서버 `seraph/clusters.py` 의 라우팅 기준)
+  - CE → `moana` (`debug_ce_ugrad`), EE/BME → `moana` (`debug_eebme_ugrad`),
+    AI → `ariel` (`debug_ugrad`), SWCON → `aurora` (`debug_swcon_ugrad`)
+  - **대학원생은 학과와 무관하게 전부 `ariel`** (`debug_grad`/`batch_grad`)
 - **가상 파일시스템**: NAS `/data`, `/home`, 계산 노드 로컬 `/local_datasets`
 - **클러스터 토폴로지**: ariel / aurora / moana 실제 노드·GPU 구성
 - **Slurm 시뮬레이터**: `srun`(노드 진입), `sbatch`(잡 실행 → 로그 생성), `squeue`, `scancel`,
@@ -28,5 +30,9 @@ python -m http.server -d trainer 8080   # → http://localhost:8080/seraph-termi
 
 ## 배정 정책 참고
 
-학과 → 클러스터 매핑은 튜토리얼 1 *Cluster Assignment Policy* 기준입니다.
-운영 정책이 바뀌면 `seraph-terminal.html`의 `DEPTS` / `CLUSTERS` 상수를 수정하세요.
+학과 × 신분 → 클러스터·계정·파티션 매핑은 실서버 코드(`seraph/clusters.py` 의 `_ROUTING`·
+`cluster_for`, `seraph/placement.py` 의 `partition_from_account`)와 QOS(`seraph/parsers/qos.py`:
+학부 `ugrad` = GPU 1, 대학원 `grad` = GPU 4, 둘 다 `high_perf=0`) 기준입니다.
+클러스터별 총 GPU 수·노드 이름도 `clusters.py`(ariel 182 / moana 121 / aurora 62)를 따릅니다.
+운영 정책이 바뀌면 `seraph-terminal.html`의 `DEPTS` / `CLUSTERS` / `profileFor` 를 수정하세요.
+(노드별 세부 GPU 개수는 실서버가 공개하지 않아 총합이 맞도록 추정 배분했습니다.)
