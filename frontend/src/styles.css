@@ -145,3 +145,46 @@ button.hrow:hover{background:#f8fafc}
 .cc-allowed{font-size:10px;color:#5a6577;line-height:1.5;margin:8px 0 0;min-height:30px}
 .cc-host{font-size:9px;color:#98a2b3;margin:6px 0 0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 @media(max-width:1250px){.cluster-cards{grid-template-columns:1fr}}
+
+/* --- 튜토리얼 실습 터미널 --- */
+.tut-mode-toggle{display:flex;gap:5px;margin-left:auto}
+.tut-mode-toggle button{display:flex;align-items:center;gap:6px;border:1px solid #2f3d57;background:transparent;color:#aeb9cc;font-size:11px;font-weight:600;border-radius:8px;padding:7px 12px}
+.tut-mode-toggle button.on{background:#2bc39a;border-color:#2bc39a;color:#08281f}
+.tut-terminal-wrap{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;margin-top:16px;align-items:start}
+.tut-term{background:#0e1626;border:1px solid #223049;border-radius:13px;overflow:hidden;display:flex;flex-direction:column;height:62vh;min-height:420px;box-shadow:0 3px 14px #20324d10}
+.tut-term-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#0b1220;border-bottom:1px solid #1c2740}
+.tt-dot{width:11px;height:11px;border-radius:50%;background:#33415a}
+.tt-dot:nth-child(1){background:#ff5f57}.tt-dot:nth-child(2){background:#febc2e}.tt-dot:nth-child(3){background:#28c840}
+.tt-title{margin-left:8px;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;color:#7c88a0}
+.tut-term-screen{flex:1;overflow-y:auto;padding:13px 15px;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:#cdd7e6;cursor:text}
+.tt-line{white-space:pre-wrap;word-break:break-word}
+.tt-line.cmd{color:#e6ebf5}
+.tt-line.c-acc{color:#4fdcb0}.tt-line.c-dim{color:#6f7c96}.tt-line.c-ok{color:#5fe3a1}.tt-line.c-warn{color:#ffc65c}.tt-line.c-err{color:#ff8a94}
+.tt-inputline{display:flex;align-items:center;gap:8px}
+.tt-ps1{color:#5fe3a1;white-space:nowrap}
+.tt-input{flex:1;background:transparent;border:0;outline:none;color:#e6ebf5;font:inherit;caret-color:#4fdcb0;padding:2px 0}
+.tut-guide{background:#fff;border:1px solid var(--line);border-radius:13px;padding:18px 19px;box-shadow:0 3px 14px #20324d08}
+.tut-guide-prog{height:5px;background:#eef1f6;border-radius:20px;overflow:hidden;margin-bottom:15px}
+.tut-guide-prog i{display:block;height:100%;background:#38c19a;border-radius:20px;transition:width .4s}
+.tut-guide-eyebrow{font-size:9px;font-weight:700;letter-spacing:1.4px;color:#93a0b4}
+.tut-guide-title{font-size:15px;margin:6px 0 8px}
+.tut-guide-hint{font-size:11px;color:#5a6577;line-height:1.65;margin:0 0 12px}
+.tut-guide-cmd{display:flex;align-items:center;gap:8px;background:#101827;border-radius:8px;padding:9px 11px}
+.tut-guide-cmd code{flex:1;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;color:#b9c7da;word-break:break-all}
+.tut-guide-cmd button{flex:none;border:0;background:#22304a;color:#8fa0bb;width:26px;height:26px;border-radius:6px;display:grid;place-items:center}
+.tut-guide-cmd button:hover{color:#cdd9ea}
+.tut-guide-pitfall{display:flex;gap:8px;align-items:flex-start;background:#fff7ea;border:1px solid #f3e0be;border-radius:8px;padding:10px 11px;margin-top:12px;color:#a5701c}
+.tut-guide-pitfall svg{flex:none;margin-top:1px}
+.tut-guide-pitfall p{font-size:9.5px;line-height:1.55;margin:0}
+.tut-guide-done{text-align:center;padding:10px 4px 4px}
+.tgd-badge{width:46px;height:46px;border-radius:13px;background:#e8f8f3;color:#1aae84;display:grid;place-items:center;margin:0 auto 10px}
+.tut-guide-done strong{font-size:14px;display:block}
+.tut-guide-done p{font-size:10.5px;color:#6d798d;line-height:1.6;margin:6px 0 0}
+.tut-guide-steps{list-style:none;margin:16px 0 0;padding:16px 0 0;border-top:1px solid #edf0f4;display:flex;flex-direction:column;gap:8px}
+.tut-guide-steps li{display:flex;align-items:center;gap:9px;font-size:10.5px;color:#98a3b4}
+.tut-guide-steps li.active{color:#28324a;font-weight:600}
+.tut-guide-steps li.done{color:#66728a}
+.tgs-ck{width:19px;height:19px;flex:none;border-radius:50%;border:1.5px solid #cfd6e0;display:grid;place-items:center;font-size:9px;font-weight:700;color:#98a3b4}
+.tut-guide-steps li.active .tgs-ck{border-color:#38c19a;color:#1aae84}
+.tut-guide-steps li.done .tgs-ck{background:#38c19a;border-color:#38c19a;color:#fff}
+@media(max-width:1250px){.tut-terminal-wrap{grid-template-columns:1fr}.tut-term{height:52vh}}

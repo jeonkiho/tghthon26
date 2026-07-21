@@ -12,7 +12,7 @@
 | 캐시 | 60초 TTL, `asyncio.Lock` 중복 갱신 방지, 숨겨진 탭 자동 조회 중단, 작업 목록 SFTP 자동 반복 금지, 로그인 노드 과부하 시 기존 값 유지 |
 | 대시보드 | 사용자·GPU·노드·파티션·QOS 사용량·대기 원인 표시, GPU 점유 추세·실시간 대기열(순번)·내 잡 예상 시작, 3-클러스터 안내(ariel/moana/aurora·내 소속 강조) |
 | 완료 이력 | `sacct` 완료 작업 이력·실패 진단(OOM/타임아웃/취소·시그널) 화면, 성공률·낭비 GPU 시간, 메모리 사용률(MaxRSS/요청) 표시 |
-| 튜토리얼 | `tutorial.get_tutorial()` 6단계(ssh→quota→status→data→submit→result) 안내 화면, 명령어 복사·pitfall 표시, 내 QOS 반영. SSH 연결 없이도 동작 |
+| 튜토리얼 | **실습 터미널**: 명령어를 직접 입력하면 whoami/show-qos/squeue/slurm-gres-viz/sacct 가 **실제 백엔드 데이터**로 실행되고 6단계로 검증(srun/sbatch 는 시뮬레이션). '안내 보기' 토글로 기존 카탈로그(명령어 복사·pitfall)도 제공. `tutorial.get_tutorial()` 기반 |
 | 공지 | `slack.get_announcements()` Slack 공지 채널 읽기 화면, 작성자·시각·반응·답글·BOT·긴급 표시. 토큰 없으면 mock, 실패해도 안내 문구 표시 |
 | 추천 | 기존 `placement.find_fastest()`와 Slurm `sbatch --test-only` 결과 사용 |
 | 작업 검증 | 로컬 코드, 진입 파일, 원격 데이터·결과 권한, 파티션·노드·QOS·시간 검사 |

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const ACTIVE = new Set(["SUBMITTED", "SUBMITTING", "PENDING", "RUNNING", "COMPLETING", "CANCEL_REQUESTED"]);
 const DASHBOARD_POLL_MS = 60_000;
@@ -90,6 +90,7 @@ export default function App() {
   const [historyDays, setHistoryDays] = useState(7);
   const [historyJob, setHistoryJob] = useState(null);
   const [tutorial, setTutorial] = useState(null);
+  const [tutMode, setTutMode] = useState("practice");
   const [announcements, setAnnouncements] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [form, setForm] = useState(blankForm);
@@ -404,9 +405,10 @@ export default function App() {
       </section>}
 
       {tab === "tutorial" && <section className="page tutorial-page">
-        <div className="welcome-strip"><div><span className="live-dot"/>PRACTICE</div><p>세라프 GPU 클러스터 사용 흐름입니다. 도구가 막아주지 못하는 주의사항까지 단계별로 안내합니다. (연습용 · 실서버에 영향 없음)</p></div>
+        <div className="welcome-strip"><div><span className="live-dot"/>PRACTICE</div><p>{tutMode === "practice" ? "명령어를 직접 입력하면 내 실제 클러스터 현황으로 실행됩니다. 오른쪽 단계를 따라가 보세요." : "세라프 사용 흐름과 주의사항을 읽기 자료로 정리했습니다."}</p><div className="tut-mode-toggle"><button className={tutMode === "practice" ? "on" : ""} onClick={() => setTutMode("practice")}><Icon name="terminal" size={14}/> 실습 터미널</button><button className={tutMode === "read" ? "on" : ""} onClick={() => setTutMode("read")}><Icon name="book" size={14}/> 안내 보기</button></div></div>
         {!tutorial && <div className="empty-table"><Icon name="book" size={28}/><strong>튜토리얼을 불러오는 중…</strong></div>}
-        {tutorial && <div className="tutorial-steps">{tutorial.steps.map((step, i) => <TutorialStep key={step.id} step={step} n={i + 1}/>)}</div>}
+        {tutorial && tutMode === "practice" && <TutorialTerminal steps={tutorial.steps} user={tutorial.user || me?.user}/>}
+        {tutorial && tutMode === "read" && <div className="tutorial-steps">{tutorial.steps.map((step, i) => <TutorialStep key={step.id} step={step} n={i + 1}/>)}</div>}
       </section>}
 
       {tab === "notices" && <section className="page notices-page">
@@ -543,6 +545,175 @@ function AnnouncementCard({ a }) {
     <p className="notice-text">{a.text}</p>
     {(a.reactions?.length > 0 || a.reply_count > 0) && <div className="notice-foot">{a.reactions?.map((r) => <span className="reaction" key={r.name}>{r.name} · {r.count}</span>)}{a.reply_count > 0 && <span className="replies">답글 {a.reply_count}</span>}</div>}
   </article>;
+}
+
+function fmtDurShort(s) { if (s == null) return "-"; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h${m}m` : `${m}m`; }
+
+const TERM_TASKS = [
+  { id: "whoami", stepId: "ssh", label: "접속 확인", answer: "whoami", match: /^\s*whoami\s*$/, hint: "whoami — 지금 접속한 계정을 확인합니다." },
+  { id: "quota", stepId: "quota", label: "내 할당량", answer: "show-qos", match: /^\s*(show-qos|show-assoc)\b/, hint: "show-qos — 내 GPU/고성능/동시잡 한도를 봅니다. 세라프 대기의 대부분이 이 한도 때문입니다." },
+  { id: "queue", stepId: "status", label: "대기열 보기", answer: "squeue", match: /^\s*squeue\b/, hint: "squeue — 지금 대기 줄과 예상 시작 순번을 봅니다." },
+  { id: "status", stepId: "status", label: "GPU 현황", answer: "slurm-gres-viz -i", match: /^\s*(slurm-gres-viz|sinfo)\b/, hint: "slurm-gres-viz -i — 노드별로 '실제로 쓸 수 있는' GPU를 봅니다 (CPU 없으면 못 씀)." },
+  { id: "result", stepId: "result", label: "완료 이력", answer: "sacct", match: /^\s*sacct\b/, hint: "sacct — 끝난 작업의 상태·실패 원인을 봅니다. OOM은 종료코드가 0이라 State를 꼭 봐야 합니다." },
+  { id: "submit", stepId: "submit", label: "제출 연습", answer: "srun --gres=gpu:1 -p debug_grad --pty $SHELL", match: /^\s*(srun|sbatch)\b/, hint: "srun/sbatch — 여기선 시뮬레이션. 실제 학습 제출은 '새 작업' 탭에서 안전하게 합니다." },
+];
+
+async function execTutorialCmd(raw, uname) {
+  const name = raw.trim().split(/\s+/)[0];
+  const L = (t, c) => ({ t, c: c || "" });
+  if (name === "clear") return "CLEAR";
+  if (name === "help") return [
+    L("사용 가능한 명령 — 내 실제 클러스터 데이터로 실행됩니다:", "c-acc"),
+    L("  whoami                      내 계정"),
+    L("  show-qos                    내 QOS 한도(GPU/고성능/동시잡)"),
+    L("  squeue [-u $USER]           대기열(순번·예상 시작)"),
+    L("  slurm-gres-viz -i / sinfo   노드별 사용 가능 GPU"),
+    L("  sacct                       끝난 작업 이력·실패 원인"),
+    L("  srun / sbatch               제출 연습(시뮬레이션)"),
+    L("  clear                       화면 지우기"),
+  ];
+  if (name === "whoami") { return [L(uname)]; }
+  if (name === "show-qos" || name === "show-assoc") {
+    const u = await api("/api/v1/cluster/usage");
+    const lim = (v) => v == null ? "∞" : v;
+    return [
+      L("QOS 한도 / 사용량 (내 계정)", "c-acc"),
+      L(`  GPU            ${u.gpus_in_use} / ${lim(u.gpus_limit)}`),
+      L(`  고성능 GPU      ${u.high_perf_in_use} / ${u.high_perf_limit === 0 ? "0 (사용 불가)" : lim(u.high_perf_limit)}`),
+      L(`  동시 실행 job   ${u.running_jobs} / ${lim(u.running_jobs_limit)}`),
+      L(`  제출 job        ${u.submitted_jobs} / ${lim(u.submit_jobs_limit)}`),
+      L(""),
+      L("세라프 대기의 대부분은 GPU 부족이 아니라 이 한도 초과입니다.", "c-dim"),
+    ];
+  }
+  if (name === "squeue") {
+    const mine = /\-u\b|\$USER/.test(raw);
+    const q = await api("/api/v1/queue");
+    let rows = q.pending || [];
+    if (mine) rows = rows.filter((r) => r.is_mine);
+    const out = [
+      L(`대기열: 대기 ${q.pending_count} · 실행 ${q.running_count}` + (q.my_next_position ? ` · 내 순번 ${q.my_next_position}` : ""), "c-acc"),
+      L(" 순번  JOBID     사용자    사유                예상시작", "c-dim"),
+    ];
+    if (!rows.length) out.push(L(`  (대기 중인 ${mine ? "내 " : ""}작업이 없습니다)`, "c-dim"));
+    rows.slice(0, 10).forEach((r) => out.push(L(
+      `  ${String(r.queue_position).padStart(3)}  ${String(r.job_id).padEnd(8)}  ${String(r.is_mine ? "나" : r.user).padEnd(7).slice(0, 7)}  ${String(r.reason_text || r.reason).padEnd(18).slice(0, 18)}  ${r.estimated_start ? r.estimated_start.slice(11, 16) : "-"}`,
+      r.is_mine ? "c-acc" : "")));
+    if (rows.length > 10) out.push(L(`  ... 외 ${rows.length - 10}개`, "c-dim"));
+    return out;
+  }
+  if (name === "slurm-gres-viz" || name === "sinfo") {
+    const s = await api("/api/v1/cluster/status");
+    const out = [
+      L(`GPU 현황 · ${s.partition}`, "c-acc"),
+      L(`  사용 가능 ${s.free_gpus} / 전체 ${s.total_gpus}  (고성능 ${s.free_high_perf_gpus} · 일반 ${s.free_standard_gpus})`),
+    ];
+    if (s.idle_but_unusable_gpus) out.push(L(`  ⚠ ${s.idle_but_unusable_gpus}개는 비었지만 CPU가 없어 사용 불가`, "c-warn"));
+    out.push(L(""), L(" 노드         가용/전체", "c-dim"));
+    (s.nodes || []).slice(0, 10).forEach((n) => {
+      const total = n.total_gpus || 1;
+      const fill = n.usable_gpus ? Math.max(1, Math.round((n.usable_gpus / total) * 10)) : 0;
+      const bar = "▓".repeat(fill) + "░".repeat(10 - fill);
+      out.push(L(`  ${n.name.padEnd(11)} ${String(n.usable_gpus).padStart(2)}/${total}  ${bar}`, n.usable_gpus ? "c-ok" : "c-dim"));
+    });
+    return out;
+  }
+  if (name === "sacct") {
+    const h = await api("/api/v1/jobs/history?days=7&limit=8");
+    const out = [L(h.headline, "c-acc"), L(" 작업              상태         실행    원인", "c-dim")];
+    (h.jobs || []).forEach((j) => out.push(L(
+      `  ${String(j.name || "").padEnd(16).slice(0, 16)}  ${String(j.state || "").padEnd(11).slice(0, 11)}  ${fmtDurShort(j.elapsed_seconds).padStart(5)}   ${j.succeeded ? "정상" : (j.reason_text || "")}`,
+      j.succeeded ? "" : "c-err")));
+    return out;
+  }
+  if (name === "srun") return [
+    L("srun: (연습) 인터랙티브 세션을 요청하는 명령입니다.", "c-dim"),
+    L("실제로 이 도구는 debug 파티션에서 5분 srun 으로 코드·GPU·conda를 점검합니다.", "c-dim"),
+    L("👉 실제 학습 제출은 왼쪽 '새 작업' 탭에서 안전하게 진행하세요.", "c-acc"),
+  ];
+  if (name === "sbatch") return [
+    L("sbatch: (연습) 배치 학습을 제출하는 명령입니다.", "c-dim"),
+    L("이 도구는 절대 시작 못하는 job을 미리 막고, 검증된 스크립트를 만들어 제출합니다.", "c-dim"),
+    L("👉 '새 작업' 탭 → 설정 검사 → srun 점검 → 최종 제출.", "c-acc"),
+  ];
+  if (name === "ls") return [L("data/  logs/  train.py  train.sh")];
+  if (name === "pwd") return [L(`/data/${uname}`)];
+  if (name === "cd" || name === "") return [];
+  return [L(`${name}: command not found — 'help' 로 사용 가능한 명령을 확인하세요.`, "c-err")];
+}
+
+function TutorialTerminal({ steps, user }) {
+  const uname = user || "user01";
+  const [lines, setLines] = useState(() => [
+    { t: "SERAPH 실습 터미널 — 내 실제 클러스터 현황으로 명령을 실행합니다.", c: "c-acc" },
+    { t: "오른쪽 단계를 따라 명령을 직접 입력하세요. 'help' 로 명령 목록을 봅니다.", c: "c-dim" },
+    { t: "", c: "" },
+  ]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [stepIdx, setStepIdx] = useState(0);
+  const [hist, setHist] = useState([]);
+  const [histAt, setHistAt] = useState(-1);
+  const scrollRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [lines, busy]);
+
+  const run = async (raw) => {
+    setLines((old) => [...old, { t: `${uname}@ariel-master:~$ ${raw}`, c: "cmd" }]);
+    const cmd = raw.trim();
+    if (cmd) setHist((h) => [...h, cmd]);
+    setHistAt(-1); setInput("");
+    if (!cmd) return;
+    setBusy(true);
+    let ok = false;
+    try {
+      const out = await execTutorialCmd(cmd, uname);
+      if (out === "CLEAR") setLines([]);
+      else setLines((old) => [...old, ...out]);
+      ok = true;
+    } catch {
+      setLines((old) => [...old, { t: "명령 실행 중 오류 (백엔드 연결을 확인하세요).", c: "c-err" }]);
+    }
+    setBusy(false);
+    // 명령이 실제로 성공했을 때만 단계를 진행한다(백엔드 오류 시 완료로 오인 방지).
+    if (ok) {
+      const task = TERM_TASKS[stepIdx];
+      if (task && task.match.test(cmd)) setStepIdx((i) => Math.min(i + 1, TERM_TASKS.length));
+    }
+  };
+
+  const onKey = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); if (!busy) run(input); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (hist.length) { const at = histAt < 0 ? hist.length - 1 : Math.max(0, histAt - 1); setHistAt(at); setInput(hist[at]); } }
+    else if (e.key === "ArrowDown") { e.preventDefault(); if (histAt >= 0) { const at = histAt + 1; if (at >= hist.length) { setHistAt(-1); setInput(""); } else { setHistAt(at); setInput(hist[at]); } } }
+  };
+
+  const done = stepIdx >= TERM_TASKS.length;
+  const task = TERM_TASKS[stepIdx];
+  const relStep = task && steps?.find((s) => s.id === task.stepId);
+
+  return <div className="tut-terminal-wrap">
+    <div className="tut-term" onClick={() => inputRef.current?.focus()}>
+      <div className="tut-term-bar"><span className="tt-dot"/><span className="tt-dot"/><span className="tt-dot"/><span className="tt-title">{uname}@ariel-master — practice</span></div>
+      <div className="tut-term-screen" ref={scrollRef}>
+        {lines.map((ln, i) => <div key={i} className={`tt-line ${ln.c || ""}`}>{ln.t || " "}</div>)}
+        {busy && <div className="tt-line c-dim">…</div>}
+        <div className="tt-inputline"><span className="tt-ps1">{uname}@ariel-master:~$</span><input ref={inputRef} className="tt-input" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} spellCheck="false" autoCapitalize="off" autoComplete="off" placeholder={stepIdx === 0 ? "여기에 입력…" : ""}/></div>
+      </div>
+    </div>
+    <aside className="tut-guide">
+      <div className="tut-guide-prog"><i style={{ width: `${stepIdx / TERM_TASKS.length * 100}%` }}/></div>
+      {!done ? <>
+        <div className="tut-guide-eyebrow">STEP {stepIdx + 1} / {TERM_TASKS.length}</div>
+        <h3 className="tut-guide-title">{task.label}</h3>
+        <p className="tut-guide-hint">{task.hint}</p>
+        <div className="tut-guide-cmd"><code>{task.answer}</code><button onClick={() => setInput(task.answer)} title="입력창에 넣기"><Icon name="copy" size={13}/></button></div>
+        {relStep?.pitfall && <div className="tut-guide-pitfall"><Icon name="warn" size={14}/><p>{relStep.pitfall}</p></div>}
+      </> : <div className="tut-guide-done"><div className="tgd-badge"><Icon name="check" size={22}/></div><strong>실습 완료!</strong><p>기본 명령을 다 익혔습니다. 이제 '새 작업' 탭에서 실제로 학습을 제출해 보세요.</p></div>}
+      <ol className="tut-guide-steps">{TERM_TASKS.map((t, i) => <li key={t.id} className={i < stepIdx ? "done" : i === stepIdx ? "active" : ""}><span className="tgs-ck">{i < stepIdx ? "✓" : i + 1}</span>{t.label}</li>)}</ol>
+    </aside>
+  </div>;
 }
 
 function TutorialStep({ step, n }) {
