@@ -61,7 +61,15 @@ class Snapshot:
 
     @property
     def default_partition(self):
-        """내 신분에 맞는 기본 파티션. 학부생이면 batch_ugrad."""
+        """내 계정에 맞는 기본 파티션.
+
+        학부 파티션은 학과별로 갈리므로 계정에서 유도한다(ugrad_ce -> batch_ce_ugrad).
+        실서버에 그 파티션이 실제로 있으면 그것을, 없으면(예: mock) 신분별 config
+        기본값으로 떨어진다.
+        """
+        want = clusters.partition_from_account(self.account)
+        if self.partitions and want in self.partitions:
+            return want
         if self.is_undergrad:
             return self.config.undergrad_partition
         return self.config.default_partition
@@ -88,10 +96,30 @@ def can_use_partition(snapshot, partition):
     if undergrad is None:
         return True                     # 신분 불명이면 판단 보류
     if partition.endswith('_ugrad'):
-        return undergrad
+        if not undergrad:
+            return False
+        # 학부생은 자기 계정(학과)의 파티션만 쓸 수 있다. 타 학과 *_ugrad 는 서버가 거절.
+        own = {clusters.partition_from_account(snapshot.account, 'batch'),
+               clusters.partition_from_account(snapshot.account, 'debug')}
+        return partition in own
     if partition.endswith('_grad'):
         return not undergrad
     return True
+
+
+def _node_allowlist(snapshot):
+    """학부 노드 제한(config.undergrad_nodes)을, 그 노드가 지금 접속한 클러스터에
+    실제로 존재할 때만 적용한다.
+
+    ariel(=ariel-v[6-12] 존재)이면 그 목록으로 제한하고, moana 등 다른 클러스터면
+    그 이름이 아예 없으므로 None(추가 제한 없음 — 파티션 멤버십이 곧 제약)을 준다.
+    학부생이 아니면 None.
+    """
+    if not snapshot.is_undergrad:
+        return None
+    cfg = set(snapshot.config.undergrad_nodes)
+    present = {n.name for n in snapshot.nodes}
+    return cfg if (cfg & present) else None
 
 
 def get_partitions(snapshot):
@@ -109,6 +137,14 @@ def whoami(snapshot):
     account = snapshot.account
     # 계정 설명에 클러스터가 적혀 있으면 그게 접미어 추측보다 정확하다.
     info = clusters.belongs_here(account, snapshot.account_description)
+    # 실제 접속한 클러스터를 노드 이름으로 추정. 계정 소속과 맞으면 '제 클러스터'로 본다
+    # (PRIMARY 상수 대신 실데이터 기준). moana 등에 제대로 붙었으면 안내를 띄우지 않는다.
+    connected = clusters.infer_cluster(snapshot.nodes)
+    on_primary = info['on_primary']
+    notice = info['advice']
+    if connected and info['cluster']:
+        on_primary = (info['cluster'] == connected)
+        notice = '' if on_primary else info['advice']
     return {
         'user': snapshot.me,
         'account': account,
@@ -118,10 +154,11 @@ def whoami(snapshot):
         'position': clusters.position_from_account(account),
         'major': clusters.major_from_account(account),
         'cluster': info['cluster'],           # 소속 클러스터 (ariel/moana/aurora)
-        'on_primary': info['on_primary'],      # 이 도구가 보는 클러스터가 맞는가
+        'connected_cluster': connected,        # 지금 실제로 붙어 있는 클러스터
+        'on_primary': on_primary,              # 내 소속 클러스터에 제대로 붙었는가
         'default_partition': snapshot.default_partition,
-        # ariel 이 아니면 "저 서버로 가라" 안내가 채워진다
-        'cluster_notice': info['advice'],
+        # 소속과 다른 클러스터에 붙었을 때만 "저 서버로 가라" 안내가 채워진다
+        'cluster_notice': notice,
     }
 
 
@@ -181,8 +218,8 @@ def get_node_availability(snapshot, partition=None, need_gpus=1,
     if high_perf and limit and limit.max_high_perf_gpus == 0:
         return []
 
-    # 학부생은 정해진 노드만 쓸 수 있다. 못 쓰는 노드는 추천에서 뺀다.
-    allowed = set(snapshot.config.undergrad_nodes) if snapshot.is_undergrad else None
+    # 학부생은 정해진 노드만 쓸 수 있다(ariel 한정). moana 등에선 파티션 멤버십으로 충분.
+    allowed = _node_allowlist(snapshot)
 
     candidates = [
         n for n in _nodes_in(snapshot, partition)
@@ -618,13 +655,14 @@ def lint_job(snapshot, *, partition=None, gpus=1, high_perf=False, paths=(),
         problem = _lint_node_type(snapshot, node, high_perf)
         if problem:
             problems.append(problem)
-        # 학부생은 정해진 노드만 쓸 수 있다 (batch_ugrad + QOS high_perf=0).
-        if snapshot.is_undergrad and node not in cfg.undergrad_nodes:
+        # 학부생 노드 제한(ariel 한정). moana 등에선 파티션 멤버십이 제약이라 여기선 통과.
+        allow = _node_allowlist(snapshot)
+        if allow is not None and node not in allow:
             problems.append({
                 'level': 'block',
                 'code': 'UNDERGRAD_NODE_RESTRICTED',
                 'message': (f'학부생은 {node} 를 쓸 수 없습니다. '
-                            f"쓸 수 있는 노드: {', '.join(cfg.undergrad_nodes)}."),
+                            f"쓸 수 있는 노드: {', '.join(sorted(allow))}."),
             })
 
     # 서버가 강제하지 않는 "권장" 정책 경고 (차단 아님)

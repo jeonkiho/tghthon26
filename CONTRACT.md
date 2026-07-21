@@ -162,20 +162,23 @@ Slurm 에게 직접 물어본다(우선순위·backfill·QOS 를 다 계산한 �
 
 ```json
 {
-  "user": "user01", "account": "grad", "qos": "qos_user01_2026_1",
-  "is_undergrad": false, "position": "grad", "major": null,
-  "cluster": "ariel", "on_primary": true,
-  "default_partition": "batch_grad",
+  "user": "henry7007", "account": "ugrad_ce", "qos": "ugrad",
+  "is_undergrad": true, "position": "undergrad", "major": "ce",
+  "cluster": "moana", "connected_cluster": "moana", "on_primary": true,
+  "default_partition": "batch_ce_ugrad",
   "cluster_notice": ""
 }
 ```
 
 - `is_undergrad` 로 화면을 학부/대학원 모드로 나눌 수 있다. (모르면 `null`)
-- **`on_primary` 가 `false` 면 이 사용자는 ariel 소속이 아니다.** `cluster_notice`
+- `cluster` 는 계정으로 판단한 **소속** 클러스터, `connected_cluster` 는 지금 **실제로
+  붙어 있는** 클러스터(노드 이름으로 추정). 둘이 같으면 `on_primary: true`.
+- **`on_primary` 가 `false` 면 소속과 다른 클러스터에 붙은 것이다.** `cluster_notice`
   에 "당신(CE 학부생)은 moana 를 쓰세요..." 같은 완성된 안내가 들어온다. 그걸 크게
-  띄우고 나머지 실시간 화면은 참고용으로만 보여주면 된다.
-- `default_partition` 은 이 사용자에게 맞는 기본 파티션(대학원=batch_grad,
-  학부=batch_ugrad). `get_gpu_status` 등에 partition 을 안 넘기면 이게 쓰인다.
+  띄우고 나머지 실시간 화면은 참고용으로만 보여주면 된다. 제대로 접속했으면 빈 문자열.
+- `default_partition` 은 **계정에서 유도**한다: `ugrad_ce → batch_ce_ugrad`,
+  `ugrad_eebme → batch_eebme_ugrad`, `ugrad(ariel AI) → batch_ugrad`, 대학원생 →
+  `batch_grad`. `get_gpu_status` 등에 partition 을 안 넘기면 이게 쓰인다.
 
 ## `get_partitions(snap)` — 파티션별 사용 가능 여부
 
