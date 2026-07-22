@@ -162,20 +162,23 @@ Slurm 에게 직접 물어본다(우선순위·backfill·QOS 를 다 계산한 �
 
 ```json
 {
-  "user": "user01", "account": "grad", "qos": "qos_user01_2026_1",
-  "is_undergrad": false, "position": "grad", "major": null,
-  "cluster": "ariel", "on_primary": true,
-  "default_partition": "batch_grad",
+  "user": "henry7007", "account": "ugrad_ce", "qos": "ugrad",
+  "is_undergrad": true, "position": "undergrad", "major": "ce",
+  "cluster": "moana", "connected_cluster": "moana", "on_primary": true,
+  "default_partition": "batch_ce_ugrad",
   "cluster_notice": ""
 }
 ```
 
 - `is_undergrad` 로 화면을 학부/대학원 모드로 나눌 수 있다. (모르면 `null`)
-- **`on_primary` 가 `false` 면 이 사용자는 ariel 소속이 아니다.** `cluster_notice`
+- `cluster` 는 계정으로 판단한 **소속** 클러스터, `connected_cluster` 는 지금 **실제로
+  붙어 있는** 클러스터(노드 이름으로 추정). 둘이 같으면 `on_primary: true`.
+- **`on_primary` 가 `false` 면 소속과 다른 클러스터에 붙은 것이다.** `cluster_notice`
   에 "당신(CE 학부생)은 moana 를 쓰세요..." 같은 완성된 안내가 들어온다. 그걸 크게
-  띄우고 나머지 실시간 화면은 참고용으로만 보여주면 된다.
-- `default_partition` 은 이 사용자에게 맞는 기본 파티션(대학원=batch_grad,
-  학부=batch_ugrad). `get_gpu_status` 등에 partition 을 안 넘기면 이게 쓰인다.
+  띄우고 나머지 실시간 화면은 참고용으로만 보여주면 된다. 제대로 접속했으면 빈 문자열.
+- `default_partition` 은 **계정에서 유도**한다: `ugrad_ce → batch_ce_ugrad`,
+  `ugrad_eebme → batch_eebme_ugrad`, `ugrad(ariel AI) → batch_ugrad`, 대학원생 →
+  `batch_grad`. `get_gpu_status` 등에 partition 을 안 넘기면 이게 쓰인다.
 
 ## `get_partitions(snap)` — 파티션별 사용 가능 여부
 
@@ -350,6 +353,50 @@ Slurm이 계산한 값을 쓴다. 직접 계산하지 않는다.
 대기 job 전부에 동일한 시각이 찍히므로 숫자를 그대로 믿으면 안 된다.
 `confidence != "medium"` 이면 "약 21:18 (추정 부정확)" 처럼 흐리게 표시할 것.
 `found: false` 면 나머지 키는 없다.
+
+`diagnose_pending()` 의 각 job 에도 같은 `confidence` 가 들어간다(위 규칙과 동일).
+
+---
+
+## `get_queue(snap, partition='batch_grad')`
+
+대기열 전체 뷰. "내 작업이 언제쯤 들어가고 어디쯤 있나"에 답한다. 대시보드용.
+
+```json
+{
+  "partition": "batch_grad",
+  "pending_count": 39,
+  "running_count": 72,
+  "my_pending_count": 2,
+  "my_running_count": 1,
+  "my_next_position": 3,          // 내 대기 job 중 가장 앞선 순번. 없으면 null
+  "pending": [
+    {
+      "job_id": "366184", "name": "...", "user": "user08", "is_mine": false,
+      "gpus": 1, "high_perf_gpus": 0,
+      "reason": "Resources", "reason_text": "클러스터에 여유 GPU 부족",
+      "estimated_start": "2026-07-10T16:53:08",   // null 가능
+      "confidence": "medium",      // medium | low | unknown (estimate_wait_time 과 동일 규칙)
+      "blocked_by_quota": false,
+      "queue_position": 1
+    }
+  ],
+  "running": [
+    {"job_id": "...", "name": "...", "user": "...", "is_mine": true,
+     "gpus": 2, "high_perf_gpus": 0, "nodes": "ariel-v7", "time_used": "2-19:04:48"}
+  ]
+}
+```
+
+- `pending` 은 **추정 시작 시각 순**(= `queue_position` 오름차순)으로 정렬돼 있다.
+- `queue_position` 은 진짜 Slurm 우선순위 순위가 아니라 `squeue --start` 추정 시각
+  기준의 대략적 순번이다. **`blocked_by_quota: true` 인 job 은 순번이 큰 의미가
+  없다**(GPU 경쟁이 아니라 본인 QOS 한도로 막힌 것). 그런 행은 순번을 흐리게 두거나
+  사유를 강조하는 게 맞다.
+- `is_mine` 으로 내 job 을 하이라이트한다.
+
+점유 추세(시계열)는 별도 HTTP 엔드포인트 `GET /api/v1/cluster/history` 가 백엔드
+메모리에 폴링마다 쌓은 표본을 준다(별도 DB 없음, 서버 재시작 시 초기화).
 
 ---
 

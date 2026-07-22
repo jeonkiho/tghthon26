@@ -71,6 +71,99 @@ def test_parse_partitions_marks_default():
     assert p['debug_grad'].time_limit_seconds == 14400
 
 
+# --- queue / eta -------------------------------------------------------------
+
+def test_confidence_rules():
+    assert services._confidence('Resources', '2026-07-10T21:00:00') == 'medium'
+    assert services._confidence('QOSMaxGRESPerUser', '2026-07-10T21:00:00') == 'low'
+    assert services._confidence('Dependency', '2026-07-10T21:00:00') == 'low'
+    assert services._confidence('Resources', None) == 'unknown'
+
+
+def test_get_queue_ranks_and_marks_mine(snap):
+    q = services.get_queue(snap)
+    assert q['pending_count'] == len(q['pending'])
+    assert q['running_count'] == len(q['running'])
+    # 순번은 1..N 로 연속이며 중복이 없다.
+    positions = [row['queue_position'] for row in q['pending']]
+    assert positions == list(range(1, len(positions) + 1))
+    # is_mine 은 사용자명과 일치해야 한다.
+    for row in q['pending'] + q['running']:
+        assert row['is_mine'] == (row['user'] == snap.me)
+    for row in q['pending']:
+        assert row['confidence'] in ('medium', 'low', 'unknown')
+        assert row['blocked_by_quota'] == (row['reason'] == 'QOSMaxGRESPerUser')
+
+
+def test_get_queue_my_next_position(snap):
+    q = services.get_queue(snap)
+    mine = [r['queue_position'] for r in q['pending'] if r['is_mine']]
+    assert q['my_next_position'] == (min(mine) if mine else None)
+
+
+def test_diagnose_includes_confidence(snap):
+    d = services.diagnose_pending(snap, snap.me)
+    for job in d['jobs']:
+        assert job['confidence'] in ('medium', 'low', 'unknown')
+
+
+# --- moana (학과별 파티션/노드) readiness ------------------------------------
+
+def test_partition_from_account():
+    from seraph import clusters
+    assert clusters.partition_from_account('ugrad_ce') == 'batch_ce_ugrad'
+    assert clusters.partition_from_account('ugrad_eebme') == 'batch_eebme_ugrad'
+    assert clusters.partition_from_account('ugrad') == 'batch_ugrad'
+    assert clusters.partition_from_account('grad') == 'batch_grad'
+    assert clusters.partition_from_account('ugrad_ce', 'debug') == 'debug_ce_ugrad'
+
+
+class _FakeSnap:
+    """can_use_partition / _node_allowlist 는 account·is_undergrad·nodes·config 만 본다."""
+    def __init__(self, account, is_undergrad, node_names=()):
+        self.account = account
+        self.is_undergrad = is_undergrad
+        self.nodes = [type('N', (), {'name': n})() for n in node_names]
+        self.config = config_module.load(pathlib.Path('/no/such.yaml'))
+
+
+def test_can_use_partition_is_department_aware():
+    ce = _FakeSnap('ugrad_ce', True)
+    assert services.can_use_partition(ce, 'batch_ce_ugrad') is True
+    assert services.can_use_partition(ce, 'debug_ce_ugrad') is True
+    assert services.can_use_partition(ce, 'batch_eebme_ugrad') is False   # 타 학과
+    assert services.can_use_partition(ce, 'batch_grad') is False          # 대학원용
+
+
+def test_node_allowlist_only_applies_when_present_on_cluster():
+    # moana 노드만 있으면 ariel-v* allowlist 는 적용 안 됨(None) -> 학부 노드 오차단 방지
+    moana = _FakeSnap('ugrad_ce', True, node_names=['moana-y1', 'moana-r1'])
+    assert services._node_allowlist(moana) is None
+    # ariel 노드가 있으면 그 목록으로 제한
+    ariel = _FakeSnap('ugrad', True, node_names=['ariel-v6', 'ariel-v7', 'ariel-g1'])
+    allow = services._node_allowlist(ariel)
+    assert allow is not None and 'ariel-v6' in allow and 'ariel-g1' not in allow
+
+
+def test_parse_sacct_handles_array_job_ids():
+    from seraph.parsers.sacct import parse_sacct
+    text = (
+        "131057_3|arr|COMPLETED|0:0|2026-07-20T10:00:00|2026-07-20T11:00:00|"
+        "01:00:00|1-00:00:00|batch_ce_ugrad|moana-y5|gres/gpu=1|32G|\n"
+        "131058|solo|FAILED|1:0|2026-07-20T09:00:00|2026-07-20T09:30:00|"
+        "00:30:00|1-00:00:00|batch_ce_ugrad|moana-r1|gres/gpu=1|32G|\n"
+    )
+    jobs = parse_sacct(text)   # 예전엔 int('131057_3') 로 ValueError 크래시
+    ids = {j.job_id for j in jobs}
+    assert ids == {'131057_3', '131058'}
+
+
+def test_parse_partitions_aggregates_multi_state_rows():
+    p = parse_partitions('batch_ce_ugrad*|1-00:00:00|3\nbatch_ce_ugrad|1-00:00:00|4\n')
+    assert p['batch_ce_ugrad'].node_count == 7        # 3 + 4 합산
+    assert p['batch_ce_ugrad'].is_default is True     # '*' OR
+
+
 # --- lint --------------------------------------------------------------------
 
 def test_lint_blocks_over_time_limit(snap):

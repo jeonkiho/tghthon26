@@ -116,9 +116,12 @@ def _node_candidates(snapshot, partition, gpus, high_perf, limit):
         if partition in n.partitions and n.schedulable
         and n.is_high_perf == high_perf and n.total_gpus >= gpus
     ]
+    # 학부 노드 제한은 그 노드가 이 클러스터에 실제 있을 때만(ariel). moana 등은 파티션으로 충분.
     if snapshot.is_undergrad:
         allowed = set(snapshot.config.undergrad_nodes)
-        nodes = [n for n in nodes if n.name in allowed]
+        present = {n.name for n in snapshot.nodes}
+        if allowed & present:
+            nodes = [n for n in nodes if n.name in allowed]
     # 지금 여유가 있는 노드 우선, 그다음 여유 GPU/CPU 많은 순
     nodes.sort(key=lambda n: (-(n.usable_gpus >= gpus), -n.usable_gpus,
                               -n.free_gpus, -n.idle_cpus))

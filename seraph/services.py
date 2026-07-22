@@ -20,7 +20,10 @@ REASON_TEXT = {
     'Resources': '클러스터에 여유 GPU 부족',
     'Priority': '우선순위가 높은 다른 job 이 먼저 대기 중',
     'Dependency': '먼저 끝나야 하는 job 이 있음',
+    'DependencyNeverSatisfied': '의존하는 job 이 실패·취소되어 시작될 수 없음 (취소 필요)',
     'ReqNodeNotAvail': '요청한 노드를 지금 쓸 수 없음',
+    'QOSMaxJobsPerUserLimit': '동시 실행 job 한도 초과',
+    'AssocMaxJobsLimit': '계정 동시 실행 한도 초과',
     'None': '',
 }
 
@@ -61,7 +64,15 @@ class Snapshot:
 
     @property
     def default_partition(self):
-        """내 신분에 맞는 기본 파티션. 학부생이면 batch_ugrad."""
+        """내 계정에 맞는 기본 파티션.
+
+        학부 파티션은 학과별로 갈리므로 계정에서 유도한다(ugrad_ce -> batch_ce_ugrad).
+        실서버에 그 파티션이 실제로 있으면 그것을, 없으면(예: mock) 신분별 config
+        기본값으로 떨어진다.
+        """
+        want = clusters.partition_from_account(self.account)
+        if self.partitions and want in self.partitions:
+            return want
         if self.is_undergrad:
             return self.config.undergrad_partition
         return self.config.default_partition
@@ -88,10 +99,30 @@ def can_use_partition(snapshot, partition):
     if undergrad is None:
         return True                     # 신분 불명이면 판단 보류
     if partition.endswith('_ugrad'):
-        return undergrad
+        if not undergrad:
+            return False
+        # 학부생은 자기 계정(학과)의 파티션만 쓸 수 있다. 타 학과 *_ugrad 는 서버가 거절.
+        own = {clusters.partition_from_account(snapshot.account, 'batch'),
+               clusters.partition_from_account(snapshot.account, 'debug')}
+        return partition in own
     if partition.endswith('_grad'):
         return not undergrad
     return True
+
+
+def _node_allowlist(snapshot):
+    """학부 노드 제한(config.undergrad_nodes)을, 그 노드가 지금 접속한 클러스터에
+    실제로 존재할 때만 적용한다.
+
+    ariel(=ariel-v[6-12] 존재)이면 그 목록으로 제한하고, moana 등 다른 클러스터면
+    그 이름이 아예 없으므로 None(추가 제한 없음 — 파티션 멤버십이 곧 제약)을 준다.
+    학부생이 아니면 None.
+    """
+    if not snapshot.is_undergrad:
+        return None
+    cfg = set(snapshot.config.undergrad_nodes)
+    present = {n.name for n in snapshot.nodes}
+    return cfg if (cfg & present) else None
 
 
 def get_partitions(snapshot):
@@ -109,6 +140,14 @@ def whoami(snapshot):
     account = snapshot.account
     # 계정 설명에 클러스터가 적혀 있으면 그게 접미어 추측보다 정확하다.
     info = clusters.belongs_here(account, snapshot.account_description)
+    # 실제 접속한 클러스터를 노드 이름으로 추정. 계정 소속과 맞으면 '제 클러스터'로 본다
+    # (PRIMARY 상수 대신 실데이터 기준). moana 등에 제대로 붙었으면 안내를 띄우지 않는다.
+    connected = clusters.infer_cluster(snapshot.nodes)
+    on_primary = info['on_primary']
+    notice = info['advice']
+    if connected and info['cluster']:
+        on_primary = (info['cluster'] == connected)
+        notice = '' if on_primary else info['advice']
     return {
         'user': snapshot.me,
         'account': account,
@@ -118,10 +157,11 @@ def whoami(snapshot):
         'position': clusters.position_from_account(account),
         'major': clusters.major_from_account(account),
         'cluster': info['cluster'],           # 소속 클러스터 (ariel/moana/aurora)
-        'on_primary': info['on_primary'],      # 이 도구가 보는 클러스터가 맞는가
+        'connected_cluster': connected,        # 지금 실제로 붙어 있는 클러스터
+        'on_primary': on_primary,              # 내 소속 클러스터에 제대로 붙었는가
         'default_partition': snapshot.default_partition,
-        # ariel 이 아니면 "저 서버로 가라" 안내가 채워진다
-        'cluster_notice': info['advice'],
+        # 소속과 다른 클러스터에 붙었을 때만 "저 서버로 가라" 안내가 채워진다
+        'cluster_notice': notice,
     }
 
 
@@ -181,8 +221,8 @@ def get_node_availability(snapshot, partition=None, need_gpus=1,
     if high_perf and limit and limit.max_high_perf_gpus == 0:
         return []
 
-    # 학부생은 정해진 노드만 쓸 수 있다. 못 쓰는 노드는 추천에서 뺀다.
-    allowed = set(snapshot.config.undergrad_nodes) if snapshot.is_undergrad else None
+    # 학부생은 정해진 노드만 쓸 수 있다(ariel 한정). moana 등에선 파티션 멤버십으로 충분.
+    allowed = _node_allowlist(snapshot)
 
     candidates = [
         n for n in _nodes_in(snapshot, partition)
@@ -277,13 +317,15 @@ def diagnose_pending(snapshot, user, partition=None):
     findings = []
     for job in pending:
         reason = job.reason
+        start = snapshot.start_times.get(job.job_id)
         detail = {
             'job_id': job.job_id,
             'name': job.name,
             'reason': reason,
             'reason_text': REASON_TEXT.get(reason, reason),
             'requested_gpus': job.gpus,
-            'estimated_start': snapshot.start_times.get(job.job_id),
+            'estimated_start': start,
+            'confidence': _confidence(reason, start),   # medium | low | unknown
             'blocked_by_quota': False,
             'quota_kind': None,     # 'gpu' | 'high_perf_gpu' | 'running_jobs'
             'advice': '',
@@ -370,6 +412,19 @@ def _headline(blocked, pending, free_gpus, usage):
     )
 
 
+def _confidence(reason, start):
+    """예상 시작 시각의 신뢰도.
+
+    Slurm 이 시각을 못 내면 unknown. QOS 한도/의존성으로 막힌 job 은 같은 사용자
+    대기 job 전부에 똑같은 시각이 찍혀 부정확하므로 low. 그 외에는 medium.
+    """
+    if start is None:
+        return 'unknown'
+    if reason in ('QOSMaxGRESPerUser', 'Dependency'):
+        return 'low'
+    return 'medium'
+
+
 def estimate_wait_time(snapshot, job_id):
     """예상 시작 시각.
 
@@ -383,19 +438,16 @@ def estimate_wait_time(snapshot, job_id):
 
     start = snapshot.start_times.get(job.job_id)
     reason = job.reason
+    confidence = _confidence(reason, start)
 
     if start is None:
-        confidence = 'unknown'
         note = 'Slurm 이 시작 시각을 추정하지 못했습니다.'
     elif reason == 'QOSMaxGRESPerUser':
-        confidence = 'low'
         note = ('할당량으로 막힌 job 은 Slurm 추정이 부정확합니다. '
                 '앞선 본인 job 이 끝나면 더 빨라집니다.')
     elif reason == 'Dependency':
-        confidence = 'low'
         note = '선행 job 의 종료 시각에 따라 달라집니다.'
     else:
-        confidence = 'medium'
         note = 'Slurm 추정 기준입니다.'
 
     return {
@@ -407,6 +459,73 @@ def estimate_wait_time(snapshot, job_id):
         'source': 'squeue --start',
         'reason': reason,
         'note': note,
+    }
+
+
+def get_queue(snapshot, partition=None):
+    """대기열 전체 뷰. "내 작업이 언제쯤 들어가고 어디쯤 있나" 에 답한다.
+
+    실행 중 / 대기 중 job 을 나눠서 준다. 대기 job 에는 추정 순번(queue_position)과
+    예상 시작 시각·신뢰도를 붙인다.
+
+    순번은 Slurm 이 추정한 시작 시각 순이다. 진짜 우선순위 순위는 아니고
+    (특히 QOS 한도로 막힌 job 은 순번이 큰 의미가 없다 -> blocked_by_quota 로 표시),
+    "내 job 앞에 몇 개가 있나" 의 대략적인 감을 주는 값이다.
+    """
+    partition = _partition(snapshot, partition)
+    me = snapshot.me
+    in_part = [j for j in snapshot.jobs if j.partition == partition]
+    running = [j for j in in_part if j.is_running]
+    pending = [j for j in in_part if j.is_pending]
+
+    def order_key(j):
+        start = snapshot.start_times.get(j.job_id)
+        # 시각이 있는 job 을 앞으로, 없는 job 은 뒤로. 동률은 job_id 로 안정 정렬.
+        return (0, start) if start else (1, j.job_id)
+
+    ordered = sorted(pending, key=order_key)
+    rank = {j.job_id: i + 1 for i, j in enumerate(ordered)}
+
+    def pending_row(job):
+        start = snapshot.start_times.get(job.job_id)
+        return {
+            'job_id': job.job_id,
+            'name': job.name,
+            'user': job.user,
+            'is_mine': job.user == me,
+            'gpus': job.gpus,
+            'high_perf_gpus': job.high_perf_gpus,
+            'reason': job.reason,
+            'reason_text': REASON_TEXT.get(job.reason, job.reason),
+            'estimated_start': start,
+            'confidence': _confidence(job.reason, start),
+            'blocked_by_quota': job.reason == 'QOSMaxGRESPerUser',
+            'queue_position': rank[job.job_id],
+        }
+
+    def running_row(job):
+        return {
+            'job_id': job.job_id,
+            'name': job.name,
+            'user': job.user,
+            'is_mine': job.user == me,
+            'gpus': job.gpus,
+            'high_perf_gpus': job.high_perf_gpus,
+            'nodes': job.nodes,
+            'time_used': job.time_used,
+        }
+
+    my_positions = [rank[j.job_id] for j in ordered if j.user == me]
+    return {
+        'partition': partition,
+        'pending_count': len(pending),
+        'running_count': len(running),
+        'my_pending_count': sum(1 for j in pending if j.user == me),
+        'my_running_count': sum(1 for j in running if j.user == me),
+        # 내 대기 job 중 가장 앞선 순번. 없으면 None.
+        'my_next_position': min(my_positions) if my_positions else None,
+        'pending': [pending_row(j) for j in ordered],
+        'running': [running_row(j) for j in sorted(running, key=lambda x: x.job_id)],
     }
 
 
@@ -539,13 +658,14 @@ def lint_job(snapshot, *, partition=None, gpus=1, high_perf=False, paths=(),
         problem = _lint_node_type(snapshot, node, high_perf)
         if problem:
             problems.append(problem)
-        # 학부생은 정해진 노드만 쓸 수 있다 (batch_ugrad + QOS high_perf=0).
-        if snapshot.is_undergrad and node not in cfg.undergrad_nodes:
+        # 학부생 노드 제한(ariel 한정). moana 등에선 파티션 멤버십이 제약이라 여기선 통과.
+        allow = _node_allowlist(snapshot)
+        if allow is not None and node not in allow:
             problems.append({
                 'level': 'block',
                 'code': 'UNDERGRAD_NODE_RESTRICTED',
                 'message': (f'학부생은 {node} 를 쓸 수 없습니다. '
-                            f"쓸 수 있는 노드: {', '.join(cfg.undergrad_nodes)}."),
+                            f"쓸 수 있는 노드: {', '.join(sorted(allow))}."),
             })
 
     # 서버가 강제하지 않는 "권장" 정책 경고 (차단 아님)

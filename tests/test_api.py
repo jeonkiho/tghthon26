@@ -52,6 +52,68 @@ def test_health_and_dashboard_apis():
         assert "gpus_in_use" in client.get("/api/v1/cluster/usage").json()
         assert "headline" in client.get("/api/v1/jobs/diagnosis").json()
 
+        disconnected = client.post("/api/v1/session/disconnect").json()
+        assert disconnected["ok"] is True
+        assert disconnected["seraph_reachable"] is False
+
+        overview = client.get("/api/v1/clusters").json()
+        assert overview["primary"] == "ariel"
+        assert set(overview["clusters"]) == {"ariel", "moana", "aurora"}
+        assert overview["clusters"]["ariel"]["connectable"] is True
+        assert overview["clusters"]["moana"]["connectable"] is False
+
+
+def test_queue_eta_and_history_apis():
+    app = create_app()
+    with TestClient(app) as client:
+        queue = client.get("/api/v1/queue").json()
+        assert queue["ok"] is True
+        assert queue["pending_count"] == len(queue["pending"])
+        assert queue["running_count"] == len(queue["running"])
+
+        # /queue 요청이 스냅샷을 만들었으므로 추세 표본이 최소 1개 쌓인다.
+        history_body = client.get("/api/v1/cluster/history").json()
+        assert history_body["ok"] is True
+        assert history_body["count"] == len(history_body["samples"])
+        assert history_body["count"] >= 1
+        assert "utilization" in history_body["samples"][0]
+
+        # 대기열의 실제 job id 로 ETA 조회.
+        if queue["pending"]:
+            job_id = queue["pending"][0]["job_id"]
+            eta = client.get(f"/api/v1/jobs/eta/{job_id}")
+            assert eta.status_code == 200
+            body = eta.json()
+            assert body["found"] is True
+            assert body["confidence"] in ("medium", "low", "unknown")
+
+        # 없는 job 은 404 (라우트가 catch-all 보다 먼저 잡혀야 함).
+        assert client.get("/api/v1/jobs/eta/999999999").status_code == 404
+
+
+def test_tutorial_api():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/tutorial").json()
+        assert body["ok"] is True
+        assert body["mode"] == "practice"          # 항상 mock 위에서 돈다
+        assert [s["id"] for s in body["steps"]] == ["ssh", "quota", "status", "data", "submit", "result"]
+        for step in body["steps"]:
+            assert step["title"] and step["body"]
+            assert isinstance(step["commands"], list)
+        assert "sample_status" in body
+
+
+def test_announcements_api():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/announcements").json()
+        assert "ok" in body and "announcements" in body   # 실패해도 200 + 구조 유지
+        if body["ok"] and body["announcements"]:
+            first = body["announcements"][0]
+            for key in ("ts", "posted_at", "author", "text", "summary", "is_bot", "reply_count", "reactions"):
+                assert key in first
+
 
 def test_recommendation_and_preview_reuse_core():
     app = create_app()

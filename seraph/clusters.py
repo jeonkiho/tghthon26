@@ -84,6 +84,25 @@ def cluster_for(major, position):
     return _ROUTING.get((major, position))
 
 
+def partition_from_account(account, kind='batch'):
+    """계정 -> 실제 제출 파티션 이름.
+
+    학부 파티션은 학과별로 나뉜다(서버가 계정으로 강제):
+      ugrad_ce    -> batch_ce_ugrad      (moana, CE 학부)
+      ugrad_eebme -> batch_eebme_ugrad   (moana, EE/BME 학부)
+      ugrad       -> batch_ugrad         (ariel, AI 학부 · 접미어 없음)
+      grad / 그 외 -> batch_grad          (대학원생, 학과 무관)
+    kind='debug' 이면 debug_* 를 돌려준다.
+    """
+    if not account:
+        return f'{kind}_grad'
+    if account == 'ugrad':
+        return f'{kind}_ugrad'
+    if account.startswith('ugrad_'):
+        return f'{kind}_{account[len("ugrad_"):]}_ugrad'
+    return f'{kind}_grad'
+
+
 def major_from_account(account):
     """계정 이름에서 학과를 추정한다. 못 하면 None.
 
@@ -106,6 +125,21 @@ def position_from_account(account):
     if not account:
         return None
     return 'undergrad' if account.startswith('ugrad') else 'grad'
+
+
+def infer_cluster(nodes):
+    """실제 접속한 클러스터를 노드 이름 접두어로 추정한다.
+
+    moana-y1 -> 'moana', ariel-v3 -> 'ariel'. 못 하면 None.
+    이 도구가 ariel 외 클러스터(moana 등)에도 붙을 수 있게 되면서, "지금 어디에
+    붙어 있나"를 PRIMARY 상수가 아니라 실데이터로 판단하기 위한 것.
+    """
+    for n in nodes or ():
+        name = getattr(n, 'name', n) or ''
+        head = str(name).split('-', 1)[0]
+        if head in CLUSTERS:
+            return head
+    return None
 
 
 def cluster_from_description(description):

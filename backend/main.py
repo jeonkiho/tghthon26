@@ -13,13 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from seraph import config as config_module
-from seraph import history, placement, sbatch, services
+from seraph import clusters, history, placement, sbatch, services, slack, tutorial
 
 from .cache import SnapshotCache
 from .dependencies import ConnectionManager
 from .errors import ApiError, install_error_handlers
 from .job_service import JobService
 from .local_picker import select_code_path
+from .occupancy_history import OccupancyHistory
 from .schemas import (
     ConnectRequest,
     JobSpec,
@@ -43,6 +44,7 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     manager = ConnectionManager(cfg)
     cache = SnapshotCache(lambda: manager, ttl_seconds=cfg.poll_interval)
     jobs = JobService(manager)
+    occupancy = OccupancyHistory()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -67,6 +69,7 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     app.state.manager = manager
     app.state.cache = cache
     app.state.jobs = jobs
+    app.state.occupancy = occupancy
     install_error_handlers(app)
     app.add_middleware(
         CORSMiddleware,
@@ -78,6 +81,8 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
 
     async def cached_snapshot() -> tuple[Any, dict[str, Any]]:
         cached = await cache.get()
+        # 새 Snapshot 이면 점유 추세에 한 점을 남긴다(중복은 내부에서 무시).
+        occupancy.record(cached)
         meta = {
             "age_seconds": round(cache.age_seconds or 0.0, 3),
             "warning": cached.warning,
@@ -120,10 +125,30 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
             )
         return {"ok": True, "mode": manager.mode, "me": identity}
 
+    @app.post("/api/v1/session/disconnect")
+    async def disconnect_session() -> dict[str, Any]:
+        await to_thread.run_sync(manager.close)
+        cache.invalidate()
+        return {"ok": True, "mode": manager.mode, "seraph_reachable": manager.connected}
+
     @app.get("/api/v1/me")
     async def me() -> dict[str, Any]:
         snapshot, cache_meta = await cached_snapshot()
         return {"ok": True, **services.whoami(snapshot), "cache": cache_meta}
+
+    @app.get("/api/v1/tutorial")
+    async def get_tutorial_route() -> dict[str, Any]:
+        # 튜토리얼은 항상 mock 스냅샷 위에서 돈다(실서버 무관). SSH 연결 없이도 동작.
+        result = await to_thread.run_sync(tutorial.get_tutorial)
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/announcements")
+    async def announcements_route() -> dict[str, Any]:
+        # Slack 공지는 세라프 SSH 와 무관하다(토큰 없으면 mock). 실패해도 예외를 던지지 않는다.
+        def _fetch() -> dict[str, Any]:
+            client = slack.connect(cfg)
+            return slack.get_announcements(client, cfg.slack_channel, cfg.slack_limit)
+        return await to_thread.run_sync(_fetch)
 
     @app.post("/api/v1/local/select-code")
     async def select_local_code(
@@ -154,6 +179,11 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
         snapshot, cache_meta = await cached_snapshot()
         return {"ok": True, "partitions": services.get_partitions(snapshot), "cache": cache_meta}
 
+    @app.get("/api/v1/clusters")
+    async def clusters_route() -> dict[str, Any]:
+        # 3개 클러스터 안내(정적). 실시간 아님, SSH 무관.
+        return {"ok": True, **clusters.overview()}
+
     @app.get("/api/v1/cluster/usage")
     async def cluster_usage() -> dict[str, Any]:
         snapshot, cache_meta = await cached_snapshot()
@@ -162,12 +192,23 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     @app.post("/api/v1/cluster/refresh")
     async def cluster_refresh() -> dict[str, Any]:
         cached = await cache.force_refresh()
+        occupancy.record(cached)
         return {
             "ok": True,
             "refreshed": cached.warning is None,
             "warning": cached.warning,
             "snapshot_age_seconds": round(cache.age_seconds or 0.0, 3),
         }
+
+    @app.get("/api/v1/queue")
+    async def cluster_queue(partition: str | None = None) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        return {"ok": True, **services.get_queue(snapshot, partition), "cache": cache_meta}
+
+    @app.get("/api/v1/cluster/history")
+    async def cluster_history() -> dict[str, Any]:
+        samples = occupancy.samples()
+        return {"ok": True, "samples": samples, "count": len(samples)}
 
     @app.post("/api/v1/recommendations")
     async def recommendations(body: RecommendationRequest) -> dict[str, Any]:
@@ -244,6 +285,16 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
         if not result["found"]:
             raise ApiError("JOB_NOT_FOUND", "완료 작업을 찾을 수 없습니다.", 404)
         return {"ok": True, **result}
+
+    @app.get("/api/v1/jobs/eta/{job_id}")
+    async def job_eta(
+        job_id: Annotated[str, Path(pattern=r"^[0-9]+$")],
+    ) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        result = services.estimate_wait_time(snapshot, job_id)
+        if not result.get("found"):
+            raise ApiError("JOB_NOT_FOUND", "대기열에서 작업을 찾을 수 없습니다.", 404)
+        return {"ok": True, **result, "cache": cache_meta}
 
     @app.get("/api/v1/jobs")
     async def list_jobs(limit: Annotated[int, Query(ge=1, le=100)] = 50) -> dict[str, Any]:

@@ -17,6 +17,7 @@ ExitCode 는 `종료코드:시그널` 이다. `0:125` 는 종료코드 0 에 시
 OOM killer 에 죽은 경우다. 종료코드만 보면 성공으로 오해한다.
 """
 
+import re
 from dataclasses import dataclass, asdict
 
 from .gres import gpus_from_tres
@@ -179,4 +180,10 @@ def parse_sacct(text):
         if base in mains:
             mains[base].max_rss_mb = rss
 
-    return sorted(mains.values(), key=lambda j: int(j.job_id), reverse=True)
+    # job_id 는 순수 정수가 아닐 수 있다(배열잡 '131057_3', het job '131_0+0').
+    # 숫자 조각들로 정렬해 크래시를 피한다.
+    def _sort_key(j):
+        nums = re.findall(r'\d+', j.job_id)
+        return tuple(int(n) for n in nums) if nums else (0,)
+
+    return sorted(mains.values(), key=_sort_key, reverse=True)

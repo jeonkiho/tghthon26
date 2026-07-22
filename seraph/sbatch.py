@@ -43,10 +43,12 @@ def pick_standard_node(snapshot, partition, gpus):
     법한 노드(여유 GPU·idle CPU 가 많은 순)를 고른다. 꽉 찬 노드를 지정해도
     제출은 되고 그 노드가 빌 때까지 기다린다.
     """
+    allow = services._node_allowlist(snapshot)   # 학부 노드 제한(ariel 한정), moana 등은 None
     candidates = [
         n for n in snapshot.nodes
         if partition in n.partitions and not n.is_high_perf
         and n.schedulable and n.total_gpus >= gpus
+        and (allow is None or n.name in allow)
     ]
     if not candidates:
         return None
