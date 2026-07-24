@@ -590,11 +590,20 @@ function JobTable({ jobs, onOpen }) {
 function formatEta(iso) {
   const t = new Date(iso);
   if (Number.isNaN(t.getTime())) return { abs: "—", rel: "" };
-  const abs = t.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-  const diff = (t.getTime() - Date.now()) / 1000;
+  const now = new Date();
+  const time = t.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  // 며칠 뒤 시작인데 시:분만 보여주면 오늘로 오해한다(세라프는 대기가 며칠 가는 게 흔하다).
+  // 날짜가 다르면 날짜를 함께 찍는다.
+  const sameDay = t.toDateString() === now.toDateString();
+  const abs = sameDay ? time : `${t.getMonth() + 1}/${t.getDate()} ${time}`;
+  const diff = (t.getTime() - now.getTime()) / 1000;
   if (diff <= 60) return { abs, rel: "곧" };
-  const h = Math.floor(diff / 3600), m = Math.floor((diff % 3600) / 60);
-  return { abs, rel: h > 0 ? `약 ${h}시간 ${m}분 뒤` : `약 ${m}분 뒤` };
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  // 며칠짜리 대기를 "약 91시간 뒤"로 쓰면 감이 안 온다.
+  const rel = d > 0 ? `약 ${d}일 ${h}시간 뒤` : h > 0 ? `약 ${h}시간 ${m}분 뒤` : `약 ${m}분 뒤`;
+  return { abs, rel };
 }
 
 function EtaBadge({ start, confidence }) {
@@ -623,7 +632,7 @@ function QueueTable({ pending }) {
       <span className="qname"><strong>{j.name || j.job_id}</strong><small>{j.is_mine ? "나" : j.user}</small></span>
       <span className="qgpu">{j.gpus}{j.high_perf_gpus ? " · 고성능" : ""}</span>
       <span className={`qreason ${j.blocked_by_quota ? "quota" : ""}`}>{j.reason_text || j.reason}</span>
-      <span className="qeta">{j.estimated_start ? formatEta(j.estimated_start).abs : "—"}{j.estimated_start && j.confidence !== "medium" ? " (추정)" : ""}</span>
+      <span className="qeta">{j.estimated_start ? formatEta(j.estimated_start).abs : "—"}{j.estimated_start && j.confidence !== "medium" && <em>추정</em>}</span>
     </div>)}
     {pending.length > shown.length && <div className="queue-more">외 {pending.length - shown.length}개 더 대기 중</div>}
   </div>;
