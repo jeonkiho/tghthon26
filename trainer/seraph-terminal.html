@@ -1,0 +1,1761 @@
+<title>Seraph 실습 터미널 — Slurm/Linux 인터랙티브 트레이너</title>
+<style>
+  :root{
+    /* chrome — dark default */
+    --bg:#0d0f1e; --panel:#151832; --panel-2:#1b1f3d; --border:#282c52;
+    --text:#e7e9f6; --muted:#9096c0; --muted-2:#6a6f9c;
+    --accent:#f5b942; --accent-2:#ffce6b; --accent-dim:#7a5a1c;
+    --link:#8fb3ff;
+    /* terminal screen — ALWAYS dark */
+    --term-bg:#0a0c17; --term-bg-2:#0e1120; --term-text:#d6dbf2;
+    --term-dim:#7b82ad; --term-border:#242a4d;
+    --ok:#5fe3a1; --warn:#ffc65c; --err:#ff6f79; --dir:#7aa2ff;
+    --node:#57d7ec; --prompt:#f5b942; --path:#8fb3ff; --exe:#5fe3a1;
+    --pd:#c69bff;
+    --shadow:0 24px 60px -24px rgba(0,0,0,.7);
+    --radius:14px;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code","Fira Code",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans KR",sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#eef0f9; --panel:#ffffff; --panel-2:#f3f4fb; --border:#e0e3f2;
+      --text:#1a1d33; --muted:#5a608a; --muted-2:#868cb4;
+      --accent:#bd8410; --accent-2:#a06f0a; --accent-dim:#e9d8ac;
+      --link:#3f63c9;
+      --shadow:0 20px 46px -26px rgba(40,44,90,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d0f1e; --panel:#151832; --panel-2:#1b1f3d; --border:#282c52;
+    --text:#e7e9f6; --muted:#9096c0; --muted-2:#6a6f9c; --accent:#f5b942;
+    --accent-2:#ffce6b; --accent-dim:#7a5a1c; --link:#8fb3ff;
+    --shadow:0 24px 60px -24px rgba(0,0,0,.7);
+  }
+  :root[data-theme="light"]{
+    --bg:#eef0f9; --panel:#ffffff; --panel-2:#f3f4fb; --border:#e0e3f2;
+    --text:#1a1d33; --muted:#5a608a; --muted-2:#868cb4; --accent:#bd8410;
+    --accent-2:#a06f0a; --accent-dim:#e9d8ac; --link:#3f63c9;
+    --shadow:0 20px 46px -26px rgba(40,44,90,.35);
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--text); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; line-height:1.5;
+    background-image:radial-gradient(1100px 500px at 82% -8%, color-mix(in srgb,var(--accent) 10%, transparent), transparent 70%),
+                     radial-gradient(900px 500px at 4% 108%, color-mix(in srgb,var(--link) 12%, transparent), transparent 70%);
+    background-attachment:fixed;
+  }
+  a{color:var(--link)}
+  .app{max-width:1400px;margin:0 auto;padding:18px 20px 26px;min-height:100vh;display:flex;flex-direction:column;gap:16px}
+
+  /* ---------- header ---------- */
+  header.top{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .sigil{
+    width:40px;height:40px;flex:none;border-radius:11px;display:grid;place-items:center;
+    background:linear-gradient(150deg,color-mix(in srgb,var(--accent) 34%, var(--panel)),var(--panel));
+    border:1px solid var(--border);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--accent) 30%, transparent);
+  }
+  .sigil svg{width:23px;height:23px}
+  .brand h1{font-size:19px;margin:0;letter-spacing:.32em;font-weight:600;text-transform:uppercase;
+    font-family:var(--mono);color:var(--text)}
+  .brand h1 b{color:var(--accent);font-weight:600}
+  .brand .sub{font-size:11.5px;color:var(--muted);letter-spacing:.02em;margin-top:1px}
+  .grow{flex:1 1 auto}
+  .toolbtn{
+    font-family:var(--sans);font-size:12.5px;color:var(--text);background:var(--panel);
+    border:1px solid var(--border);border-radius:9px;padding:8px 12px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:7px;transition:.15s;
+  }
+  .toolbtn:hover{border-color:color-mix(in srgb,var(--accent) 55%, var(--border));color:var(--accent)}
+  .toolbtn svg{width:15px;height:15px}
+
+  /* ---------- topology strip ---------- */
+  .topo{display:flex;align-items:stretch;gap:0;background:var(--panel);border:1px solid var(--border);
+    border-radius:12px;padding:6px;overflow-x:auto}
+  .topo .hop{display:flex;align-items:center;gap:9px;padding:7px 14px;border-radius:8px;white-space:nowrap;
+    color:var(--muted);font-size:12.5px;position:relative}
+  .topo .hop .dot{width:9px;height:9px;border-radius:50%;background:var(--muted-2);flex:none;box-shadow:0 0 0 0 transparent}
+  .topo .hop .lbl b{color:var(--text);font-family:var(--mono);font-size:12.5px;font-weight:600;display:block}
+  .topo .hop .lbl span{font-size:10.5px}
+  .topo .hop.active{background:color-mix(in srgb,var(--accent) 14%, transparent)}
+  .topo .hop.active .dot{background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 22%, transparent)}
+  .topo .hop.active .lbl b{color:var(--accent)}
+  .topo .arrow{display:flex;align-items:center;color:var(--muted-2);padding:0 2px}
+  .topo .arrow svg{width:16px;height:16px}
+
+  /* ---------- main layout ---------- */
+  .main{display:grid;grid-template-columns:minmax(0,1fr) 372px;gap:16px;align-items:start;flex:1 1 auto;min-height:0}
+  @media (max-width:940px){ .main{grid-template-columns:1fr} }
+
+  /* ---------- terminal ---------- */
+  .term{background:var(--term-bg);border:1px solid var(--term-border);border-radius:var(--radius);
+    box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden;min-height:560px;height:74vh}
+  @media (max-width:940px){ .term{height:70vh;min-height:460px} }
+  .term-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--term-bg-2);
+    border-bottom:1px solid var(--term-border);flex:none}
+  .lights{display:flex;gap:7px}
+  .lights i{width:12px;height:12px;border-radius:50%;display:block}
+  .lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+  .term-title{font-family:var(--mono);font-size:12px;color:var(--term-dim);flex:1;text-align:center;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .term-title b{color:#c7cdf0;font-weight:500}
+  .conn{font-family:var(--mono);font-size:10.5px;color:var(--ok);display:flex;align-items:center;gap:5px}
+  .conn .led{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok)}
+
+  .screen{flex:1;overflow-y:auto;padding:14px 16px 8px;font-family:var(--mono);font-size:13.5px;
+    line-height:1.62;color:var(--term-text);scroll-behavior:smooth}
+  .screen::-webkit-scrollbar{width:11px}
+  .screen::-webkit-scrollbar-thumb{background:#242a4d;border-radius:8px;border:3px solid var(--term-bg)}
+  .screen::-webkit-scrollbar-track{background:transparent}
+  .line{white-space:pre-wrap;word-break:break-word}
+  .line.cmd{color:var(--term-text)}
+  .b{font-weight:700}
+  .c-ok{color:var(--ok)} .c-warn{color:var(--warn)} .c-err{color:var(--err)}
+  .c-dir{color:var(--dir);font-weight:600} .c-node{color:var(--node)} .c-path{color:var(--path)}
+  .c-exe{color:var(--exe);font-weight:600} .c-dim{color:var(--term-dim)} .c-acc{color:var(--accent)}
+  .c-pd{color:var(--pd)} .c-mag{color:#e98bd6}
+  .ps1 .u{color:var(--ok)} .ps1 .at{color:var(--term-dim)} .ps1 .h{color:var(--node);font-weight:600}
+  .ps1 .p{color:var(--path)} .ps1 .base{color:var(--accent)} .ps1 .dollar{color:var(--term-dim)}
+  .grid-gpu{display:inline}
+  .blk-u{color:#ff8a8a}.blk-f{color:#3f4670}
+
+  .inputline{display:flex;align-items:flex-start;padding:2px 16px 16px;font-family:var(--mono);font-size:13.5px;
+    gap:0;flex:none}
+  .inputline .ps1{white-space:pre;flex:none}
+  #cmd{flex:1;min-width:2ch;background:transparent;border:none;outline:none;color:var(--term-text);
+    font-family:var(--mono);font-size:13.5px;line-height:1.62;caret-color:var(--accent);padding:0;margin:0}
+  .cursor-hint{color:var(--term-dim)}
+
+  /* ---------- sidebar ---------- */
+  .side{display:flex;flex-direction:column;gap:14px;position:sticky;top:14px;max-height:calc(100vh - 28px);overflow-y:auto;padding-right:2px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .card .hd{display:flex;align-items:center;gap:9px;padding:13px 15px;border-bottom:1px solid var(--border)}
+  .card .hd .ic{width:16px;height:16px;color:var(--accent);flex:none}
+  .card .hd h2{font-size:13px;margin:0;font-weight:650;letter-spacing:.01em}
+  .card .hd .step-count{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted);
+    background:var(--panel-2);padding:2px 8px;border-radius:20px;border:1px solid var(--border)}
+  .card .bd{padding:15px}
+
+  /* mission */
+  .prog{height:6px;background:var(--panel-2);border-radius:20px;overflow:hidden;margin-bottom:14px;border:1px solid var(--border)}
+  .prog > i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent-2));
+    border-radius:20px;transition:width .5s cubic-bezier(.2,.7,.2,1)}
+  .m-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin-bottom:5px}
+  .m-title{font-size:16px;font-weight:680;margin:0 0 6px;line-height:1.3;text-wrap:balance}
+  .m-desc{font-size:12.8px;color:var(--muted);margin:0 0 14px;line-height:1.55}
+  .m-desc code{font-family:var(--mono);font-size:11.5px;background:var(--panel-2);padding:1px 5px;border-radius:5px;color:var(--text);border:1px solid var(--border)}
+  ol.steps{list-style:none;margin:0 0 4px;padding:0;display:flex;flex-direction:column;gap:9px}
+  ol.steps li{display:flex;gap:10px;align-items:flex-start;font-size:12.8px;color:var(--text);line-height:1.5;
+    padding:9px 10px;border-radius:9px;border:1px solid transparent;transition:.2s}
+  ol.steps li.active{background:var(--panel-2);border-color:color-mix(in srgb,var(--accent) 40%, var(--border))}
+  ol.steps li.done{color:var(--muted)}
+  ol.steps li .ck{width:19px;height:19px;flex:none;border-radius:50%;border:1.5px solid var(--muted-2);
+    display:grid;place-items:center;margin-top:1px;transition:.25s}
+  ol.steps li.done .ck{background:var(--ok);border-color:var(--ok)}
+  ol.steps li.done .ck svg{opacity:1;transform:scale(1)}
+  ol.steps li .ck svg{width:11px;height:11px;color:#04140c;opacity:0;transform:scale(.4);transition:.25s}
+  ol.steps li.active .ck{border-color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 16%, transparent)}
+  ol.steps li .tx{flex:1}
+  ol.steps li .tx code{font-family:var(--mono);font-size:11.3px;background:var(--term-bg);color:var(--term-text);
+    padding:1.5px 6px;border-radius:5px;border:1px solid var(--term-border);white-space:nowrap}
+  ol.steps li.done .tx code{background:var(--panel-2);color:var(--muted);border-color:var(--border)}
+
+  .m-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:12px;font-weight:550;border-radius:9px;padding:8px 13px;cursor:pointer;
+    border:1px solid var(--border);background:var(--panel-2);color:var(--text);transition:.15s;display:inline-flex;align-items:center;gap:6px}
+  .btn:hover{border-color:color-mix(in srgb,var(--accent) 55%, var(--border))}
+  .btn.primary{background:linear-gradient(180deg,var(--accent-2),var(--accent));color:#241802;border-color:transparent;font-weight:650}
+  .btn.primary:hover{filter:brightness(1.05)}
+  .btn.ghost{background:transparent}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn svg{width:14px;height:14px}
+  .m-nav{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);gap:8px}
+  .m-nav .lessonpick{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+  .hintbox{margin-top:12px;font-size:12.2px;background:color-mix(in srgb,var(--accent) 9%, transparent);
+    border:1px solid color-mix(in srgb,var(--accent) 32%, var(--border));border-radius:9px;padding:10px 12px;color:var(--text);display:none}
+  .hintbox.show{display:block}
+  .hintbox b{color:var(--accent)}
+  .hintbox code{font-family:var(--mono);font-size:11.5px;background:var(--term-bg);color:var(--term-text);padding:1px 5px;border-radius:5px;border:1px solid var(--term-border)}
+  .alldone{text-align:center;padding:8px 4px}
+  .alldone .big{font-size:15px;font-weight:700;color:var(--accent);margin-bottom:4px}
+
+  /* reference / dos */
+  details.ref{border-top:0}
+  .ref-group{margin-bottom:11px}
+  .ref-group:last-child{margin-bottom:0}
+  .ref-group h3{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 6px}
+  .chips{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{font-family:var(--mono);font-size:11px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:6px;padding:2.5px 7px;color:var(--text);cursor:pointer;transition:.14s}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+  .dos{display:flex;flex-direction:column;gap:9px}
+  .dos .row{display:flex;gap:9px;font-size:12.3px;line-height:1.45;align-items:flex-start}
+  .dos .row .mk{font-family:var(--mono);font-weight:700;flex:none;width:16px}
+  .dos .row.no .mk{color:var(--err)} .dos .row.yes .mk{color:var(--ok)}
+  .dos .row code{font-family:var(--mono);font-size:11px;background:var(--panel-2);padding:1px 5px;border-radius:4px;border:1px solid var(--border)}
+
+  /* editor modal */
+  .overlay{position:fixed;inset:0;background:rgba(6,7,16,.72);backdrop-filter:blur(3px);z-index:50;
+    display:none;align-items:center;justify-content:center;padding:22px}
+  .overlay.show{display:flex}
+  .editor{width:min(760px,100%);max-height:88vh;background:var(--term-bg);border:1px solid var(--term-border);
+    border-radius:12px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden}
+  .editor .ebar{display:flex;align-items:center;gap:10px;padding:9px 13px;background:var(--term-bg-2);border-bottom:1px solid var(--term-border)}
+  .editor .ebar .name{font-family:var(--mono);font-size:12.5px;color:#c7cdf0}
+  .editor .ebar .mode{font-family:var(--mono);font-size:10px;color:var(--accent);border:1px solid var(--accent-dim);
+    padding:1px 7px;border-radius:20px;letter-spacing:.1em}
+  .editor .ebar .spacer{flex:1}
+  .editor textarea{flex:1;min-height:300px;resize:none;background:var(--term-bg);color:var(--term-text);
+    border:none;outline:none;font-family:var(--mono);font-size:13px;line-height:1.6;padding:14px 16px;tab-size:4}
+  .editor .efoot{display:flex;align-items:center;gap:10px;padding:9px 13px;background:var(--term-bg-2);
+    border-top:1px solid var(--term-border);font-family:var(--mono);font-size:11px;color:var(--term-dim)}
+  .editor .efoot .spacer{flex:1}
+  .kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:5px;padding:1px 6px;color:var(--text)}
+
+  /* profile badge */
+  .toolbtn.badge{font-family:var(--mono);font-size:11.5px;letter-spacing:.02em}
+  .toolbtn.badge b{color:var(--accent);font-weight:700}
+  .toolbtn.badge .dotc{color:var(--node)}
+
+  /* login modal */
+  .login{width:min(440px,100%);background:var(--panel);border:1px solid var(--border);border-radius:16px;
+    box-shadow:var(--shadow);padding:24px 24px 20px;display:flex;flex-direction:column;gap:14px}
+  .login-head{display:flex;align-items:center;gap:13px}
+  .login-head .sigil{width:44px;height:44px}
+  .login-title{font-family:var(--mono);font-size:17px;font-weight:600;letter-spacing:.16em;text-transform:uppercase}
+  .login-sub{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.4}
+  .login .fld{display:flex;flex-direction:column;gap:6px}
+  .login .fld > span{font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+  .login input,.login select{font-family:var(--sans);font-size:14px;color:var(--text);background:var(--panel-2);
+    border:1px solid var(--border);border-radius:10px;padding:11px 13px;outline:none;transition:.15s;width:100%}
+  .login input::placeholder{color:var(--muted-2)}
+  .login input:focus,.login select:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%, transparent)}
+  .login input.bad{border-color:var(--err)}
+  .seg{display:flex;gap:6px;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:4px}
+  .seg button{flex:1;font-family:var(--sans);font-size:13px;font-weight:550;color:var(--muted);background:transparent;
+    border:none;border-radius:7px;padding:8px;cursor:pointer;transition:.15s}
+  .seg button.on{background:var(--panel);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+  .login-preview{font-family:var(--mono);font-size:12.5px;background:color-mix(in srgb,var(--accent) 9%, transparent);
+    border:1px solid color-mix(in srgb,var(--accent) 30%, var(--border));border-radius:10px;padding:11px 13px;color:var(--text);line-height:1.5}
+  .login-preview b{color:var(--accent)} .login-preview .n{color:var(--link);font-weight:600}
+  .login-err{font-size:12px;color:var(--err);min-height:0;display:none}
+  .login-err.show{display:block}
+  .login-start{justify-content:center;padding:12px;font-size:14px;margin-top:2px}
+  .login-note{font-size:10.5px;color:var(--muted-2);text-align:center;line-height:1.4}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);z-index:60;
+    background:var(--panel);border:1px solid color-mix(in srgb,var(--accent) 45%, var(--border));
+    color:var(--text);padding:11px 18px;border-radius:11px;box-shadow:var(--shadow);font-size:13px;font-weight:550;
+    display:flex;align-items:center;gap:9px;opacity:0;pointer-events:none;transition:.35s cubic-bezier(.2,.8,.2,1)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast svg{width:17px;height:17px;color:var(--accent)}
+
+  @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+  .foot{text-align:center;font-size:11px;color:var(--muted-2);padding-top:2px}
+  .foot b{color:var(--muted)}
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <div class="sigil" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8L12 2z" stroke="var(--accent)" stroke-width="1.4" stroke-linejoin="round"/><path d="M12 8.5v7M9 12h6" stroke="var(--accent)" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </div>
+      <div>
+        <h1>SE<b>R</b>APH</h1>
+        <div class="sub">Slurm GPU 클러스터 · 인터랙티브 실습 터미널</div>
+      </div>
+    </div>
+    <div class="grow"></div>
+    <button class="toolbtn badge" id="profileBadge" title="계정·배정 변경" style="display:none"></button>
+    <button class="toolbtn" id="btnTheme" title="테마 전환">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/><circle cx="12" cy="12" r="3.4"/></svg>
+      <span id="themeLbl">테마</span>
+    </button>
+    <button class="toolbtn" id="btnReset" title="환경 초기화">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+      초기화
+    </button>
+  </header>
+
+  <div class="topo" id="topo"></div>
+
+  <div class="main">
+    <!-- TERMINAL -->
+    <section class="term" id="termCard">
+      <div class="term-bar">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="term-title"><b id="tTitle">student@local</b> — seraph 실습</div>
+        <div class="conn"><span class="led"></span> SSH</div>
+      </div>
+      <div class="screen" id="screen" tabindex="0"></div>
+      <div class="inputline" id="inputline">
+        <span class="ps1" id="ps1"></span><input id="cmd" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="터미널 입력" />
+      </div>
+    </section>
+
+    <!-- SIDEBAR -->
+    <aside class="side">
+      <div class="card" id="missionCard">
+        <div class="hd">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/><circle cx="12" cy="12" r="3"/></svg>
+          <h2>실습 미션</h2>
+          <span class="step-count" id="lessonNo"></span>
+        </div>
+        <div class="bd">
+          <div class="prog"><i id="progBar"></i></div>
+          <div id="missionBody"></div>
+          <div class="m-nav">
+            <button class="btn ghost" id="prevLesson">◀ 이전</button>
+            <span class="lessonpick" id="lessonPick"></span>
+            <button class="btn ghost" id="nextLesson">다음 ▶</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+          <h2>명령어 사전</h2>
+        </div>
+        <div class="bd" id="refBody"></div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2 3 6v6c0 5 3.8 8.5 9 10 5.2-1.5 9-5 9-10V6l-9-4z"/></svg>
+          <h2>Dos & Don'ts</h2>
+        </div>
+        <div class="bd">
+          <div class="dos">
+            <div class="row no"><span class="mk">✗</span><div>master 노드에서 <code>python train.py</code> 등 무거운 작업 실행 금지 → <code>srun</code>/<code>sbatch</code>로 GPU 노드 확보</div></div>
+            <div class="row no"><span class="mk">✗</span><div>Public anaconda(<code>/data/opt</code>)에서 <code>pip/conda install</code> 금지</div></div>
+            <div class="row no"><span class="mk">✗</span><div>모델이 NAS(<code>/data</code>)의 데이터셋에 직접 접근 금지</div></div>
+            <div class="row no"><span class="mk">✗</span><div>VSCode Remote-SSH 사용 금지(과도한 IOPS) → SFTP 사용</div></div>
+            <div class="row no"><span class="mk">✗</span><div><code>/home</code> 에 코드·환경 설치 금지 → <code>/data/$USER</code> 사용</div></div>
+            <div class="row yes"><span class="mk">✓</span><div>tar를 <code>/local_datasets/</code>에 풀어서 학습 (NAS 부담 X)</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="foot">경희대 Vision·AI Lab <b>Seraph</b> 튜토리얼 기반 실습 시뮬레이터 · 실제 서버가 아닙니다</div>
+    </aside>
+  </div>
+</div>
+
+<!-- editor modal -->
+<div class="overlay" id="overlay">
+  <div class="editor">
+    <div class="ebar">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <span class="name" id="edName">file</span>
+      <span class="mode">-- INSERT --</span>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="edSample" style="font-size:11px;padding:5px 9px">예시 코드 삽입</button>
+    </div>
+    <textarea id="edArea" spellcheck="false"></textarea>
+    <div class="efoot">
+      <span><span class="kbd">Ctrl</span>+<span class="kbd">S</span> 저장(:wq)</span>
+      <span><span class="kbd">Esc</span> 취소(:q!)</span>
+      <div class="spacer"></div>
+      <button class="btn" id="edCancel">취소</button>
+      <button class="btn primary" id="edSave">저장 :wq</button>
+    </div>
+  </div>
+</div>
+
+<!-- login / onboarding modal -->
+<div class="overlay" id="loginOverlay">
+  <div class="login">
+    <div class="login-head">
+      <div class="sigil" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8L12 2z" stroke="var(--accent)" stroke-width="1.4" stroke-linejoin="round"/><path d="M12 8.5v7M9 12h6" stroke="var(--accent)" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </div>
+      <div>
+        <div class="login-title">SERAPH 접속</div>
+        <div class="login-sub">경희대 계정으로 로그인하면 학과에 맞는 클러스터로 자동 배정됩니다.</div>
+      </div>
+    </div>
+    <label class="fld"><span>경희대 이메일</span>
+      <input id="liEmail" type="email" autocomplete="off" spellcheck="false" placeholder="studentid@khu.ac.kr"></label>
+    <label class="fld"><span>학과</span>
+      <select id="liMajor"></select></label>
+    <div class="fld"><span>구분</span>
+      <div class="seg" id="liPos">
+        <button type="button" data-pos="ugrad" class="on">학부생</button>
+        <button type="button" data-pos="grad">대학원생</button>
+      </div></div>
+    <div class="login-preview" id="liPreview"></div>
+    <div class="login-err" id="liErr"></div>
+    <button class="btn primary login-start" id="liStart">Seraph 접속하기 →</button>
+    <div class="login-note">학습용 시뮬레이터입니다 — 실제 서버가 아니며, 입력 정보는 이 브라우저에만 저장됩니다.</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg><span id="toastMsg"></span></div>
+
+<script>
+"use strict";
+/* ============================================================================
+   SERAPH — 인터랙티브 터미널 트레이너
+   가상 파일시스템 + 클러스터 토폴로지 + Slurm 시뮬레이터 + 단계별 미션
+   ========================================================================== */
+
+/* ---------- 클러스터 토폴로지 (튜토리얼 1, 슬라이드 7 기준) ---------- */
+function gpuNodes(prefix, spec){ // spec: [{p:'r',n:5,model,mem,g,hp,ex}, ...]  hp: 고성능 노드 여부
+  const out=[];
+  spec.forEach(s=>{ for(let i=1;i<=s.n;i++){ const ex=(s.ex&&s.ex[i])||{}; out.push({
+    name:`${prefix}-${s.p}${i}`, type:'gpu', model:ex.model||s.model, mem:ex.mem!=null?ex.mem:s.mem,
+    gpus:ex.g!=null?ex.g:s.g, hp:!!(ex.hp!=null?ex.hp:s.hp) }); } });
+  return out;
+}
+// 실서버(seraph/clusters.py) 기준 토폴로지.
+//   ariel : ariel-v[1-13], g[1-5], k[1-2], m[1-2], n1   총 182 GPU  (AI 학부 + 모든 대학원생)
+//   moana : moana-y[1-7], r[1-5], u[1-8]                총 121 GPU  (CE·EE·BME 학부)
+//   aurora: aurora-g[1-8]                               총 62 GPU   (SWCON 학부)
+// 노드 이름과 클러스터별 총 GPU 수는 실데이터다. 노드별 세부 GPU 개수는 실서버가
+// 공개하지 않으므로(우리 도구는 ariel 만 접속) 총합이 맞도록 추정해 배분했다.
+// k/m/n 은 실서버에서 '고성능(high_perf)' 노드로, 따로 신청한 사람만 쓴다(hp:true).
+const CLUSTERS = {
+  ariel:{ label:'ariel', master:'ariel-master', repNode:'ariel-v7',
+    nodes:[ {name:'ariel-master',type:'master'},{name:'ariel-NAS',type:'nas'},
+      ...gpuNodes('ariel',[{p:'g',n:5,model:'RTX 3090',mem:24,g:8},          // 40
+        {p:'v',n:13,model:'RTX A5000',mem:24,g:8},                           // 104
+        {p:'k',n:2,model:'RTX A6000',mem:48,g:8,hp:true},                    // 16 (고성능)
+        {p:'m',n:2,model:'RTX A6000',mem:48,g:8,hp:true,ex:{1:{g:7}}},       // 15 (m1: 1개 고장)
+        {p:'n',n:1,model:'A100',mem:80,g:7,hp:true}]) ],                     // 7  → 총 182
+    partitions:['debug_ugrad','batch_ugrad','debug_grad','batch_grad'] },
+  moana:{ label:'moana', master:'moana-master', repNode:'moana-r1',
+    nodes:[ {name:'moana-master',type:'master'},{name:'moana-NAS',type:'nas'},
+      ...gpuNodes('moana',[{p:'r',n:5,model:'RTX 3090',mem:24,g:8},          // 40
+        {p:'u',n:8,model:'RTX 2080 Ti',mem:11,g:4},                          // 32
+        {p:'y',n:7,model:'RTX 3090',mem:24,g:7}]) ],                         // 49 → 총 121
+    partitions:['debug_ce_ugrad','batch_ce_ugrad','debug_eebme_ugrad','batch_eebme_ugrad'] },
+  aurora:{ label:'aurora', master:'aurora-master', repNode:'aurora-g3',
+    nodes:[ {name:'aurora-master',type:'master'},{name:'aurora-NAS',type:'nas'},
+      ...gpuNodes('aurora',[{p:'g',n:8,model:'RTX 3090',mem:24,g:8,ex:{7:{g:6}}}]) ], // 62
+    partitions:['debug_swcon_ugrad','batch_swcon_ugrad'] },
+};
+const ALL_PARTS = ['debug_grad','batch_grad','debug_ugrad','batch_ugrad','debug_ce_ugrad','batch_ce_ugrad','debug_eebme_ugrad','batch_eebme_ugrad','debug_swcon_ugrad','batch_swcon_ugrad'];
+
+// 학과 × 신분 → 클러스터 배정 (실서버 seraph/clusters.py 의 _ROUTING 기준).
+//   CE·EE·BME 학부 → moana · AI 학부 → ariel · SWCON 학부 → aurora
+//   대학원생(석/박/교수)은 학과와 무관하게 전부 ariel.
+// ugAccount/ugPart 는 실서버 계정·파티션 규칙(seraph/placement.py partition_from_account).
+const DEPTS = {
+  CE:   { label:'컴퓨터공학과',        short:'CE',    cluster:'moana',  ugPart:'ce_ugrad',    ugAccount:'ugrad_ce' },
+  SWCON:{ label:'소프트웨어융합학과',  short:'SWCON', cluster:'aurora', ugPart:'swcon_ugrad', ugAccount:'ugrad_swcon' },
+  AI:   { label:'인공지능학과',        short:'AI',    cluster:'ariel',  ugPart:'ugrad',       ugAccount:'ugrad' },
+  EE:   { label:'전자공학과',          short:'EE',    cluster:'moana',  ugPart:'eebme_ugrad', ugAccount:'ugrad_eebme' },
+  BME:  { label:'생체의공학과',        short:'BME',   cluster:'moana',  ugPart:'eebme_ugrad', ugAccount:'ugrad_eebme' },
+};
+function profileFor(major, position){
+  const d=DEPTS[major]||DEPTS.CE; const grad=(position==='grad');
+  // 대학원생은 학과 무관 전부 ariel · QOS grad · 계정 grad
+  const cluster = grad ? 'ariel' : d.cluster;
+  const cl=CLUSTERS[cluster];
+  const debugPart = grad ? 'debug_grad' : `debug_${d.ugPart}`;
+  const batchPart = grad ? 'batch_grad' : `batch_${d.ugPart}`;
+  const account   = grad ? 'grad' : d.ugAccount;
+  const qos       = grad ? 'grad' : 'ugrad';
+  return { major, position, deptLabel:d.label, deptShort:d.short, cluster,
+           master:cl.master, node:cl.repNode, debugPart, batchPart, account, qos };
+}
+function usernameFromEmail(email){ const u=(email||'').split('@')[0].toLowerCase().replace(/[^a-z0-9._-]/g,''); return u||'student'; }
+
+// 결정적 초기 GPU 점유(다른 사용자들이 쓰는 중인 것처럼)
+function seededUse(name,total){ let h=0; for(let i=0;i<name.length;i++) h=(h*31+name.charCodeAt(i))>>>0; return h%(total+1); }
+
+/* ---------- 상태 ---------- */
+let USER='student';
+let S; // 전역 상태
+function freshState(){
+  return {
+    user:USER, cluster:'ariel', profile:null, email:null,
+    host:'local',            // 'local' | master | gpu node
+    prevMaster:null,
+    cwd:'/home/'+USER,
+    localCwd:'~',
+    env:{ USER:USER, HOME:'/home/'+USER, SHELL:'/bin/bash', LANG:'en_US.UTF-8',
+          PATH:'/usr/local/bin:/usr/bin:/bin' },
+    conda:{},                // host -> {inited, active}
+    bashrc:{},               // host -> string(내용)
+    fs:makeFS(),
+    gpuUse:{},               // nodeName -> used count (다른 사용자 점유 + 내 잡)
+    jobs:[],                 // {id,part,name,user,st,node,gpus,cpus,mem,elapsed,script,out,outpath,submitDir}
+    nextJob:184620,
+    alloc:null,              // 현재 srun 할당 {node,gpus,part,job}
+    history:[], histIdx:-1,
+    cmdLog:[],               // {name,argv,raw,ok}
+    lesson:0, step:0, completed:{},
+  };
+}
+function makeFS(){
+  const d=(children={})=>({t:'dir',c:children});
+  const f=(content='',opt={})=>({t:'file',content,...opt});
+  const bashrc = defaultBashrc();
+  return { t:'dir', c:{
+    data:d({
+      datasets:d({
+        ImageNet:d({ 'train':d({'n01440764_1.JPEG':f('...'),'n01530575_2.JPEG':f('...'),'n02099601_3.JPEG':f('...')}),
+                     'val':d({'ILSVRC2012_val_00000001.JPEG':f('...')}),
+                     'README':f('ImageNet ILSVRC2012 — 1.28M images. Use the tarfile, do NOT read directly from NAS.\n') }),
+        tarfiles:d({ 'ImageNet.tar':f('<<binary 147GB>>',{size:147*1024*1024*1024}),
+                     'CIFAR10.tar':f('<<binary 170MB>>',{size:170*1024*1024}) }),
+      }),
+      opt:d({ anaconda3:d({ bin:d({ conda:f('#!/bin/sh public conda',{exe:true}), python:f('',{exe:true}) }),
+              envs:d({ 'pytorch1.12.1_p38':d({}) }) }) }),
+      [USER]:d({ }),  // 사용자 개인 디렉토리 (NAS)
+    }),
+    home:d({ [USER]:d({ '.bashrc':f(bashrc) }) }),
+    local_datasets:d({}),
+    usr:d({ bin:d({ python:f('',{exe:true}), python3:f('',{exe:true}), bash:f('',{exe:true}),
+                    vim:f('',{exe:true}), git:f('',{exe:true}) }) }),
+    bin:d({}), tmp:d({}), etc:d({ hostname:f('') }),
+  }};
+}
+function defaultBashrc(){
+  return `# ~/.bashrc\nexport PS1='\\u@\\h:\\w\\$ '\nalias ll='ls -alF'\nalias la='ls -A'\n`;
+}
+// 사용자 private anaconda 를 NAS에 미리 설치되어 있는 것으로 구성
+function installPrivateConda(){
+  const home=getNode('/data/'+USER);
+  if(home && !home.c.anaconda3){
+    home.c.anaconda3={t:'dir',c:{ bin:{t:'dir',c:{ conda:{t:'file',content:'#!/bin/sh private conda',exe:true},
+      python:{t:'file',content:'',exe:true}, pip:{t:'file',content:'',exe:true} }}, envs:{t:'dir',c:{}} }};
+  }
+  if(home && !home.c.repos){ home.c.repos={t:'dir',c:{ 'coding-interview-university':{t:'dir',c:{'README.md':{t:'file',content:'# Coding Interview University\nA study plan repo.\n'}}} }}; }
+}
+
+/* ============================ 유틸 ============================ */
+const $=id=>document.getElementById(id);
+const screenEl=$('screen'), cmdEl=$('cmd'), ps1El=$('ps1');
+function esc(s){ return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+// 배정 프로필에 맞춰 미션/명령 문자열의 자리표시자 치환
+function tpl(str){ if(str==null) return str; const p=(S&&S.profile)||{}; const u=(S&&S.user)||USER;
+  return String(str)
+    .replace(/\{user\}/g,u).replace(/\{cluster\}/g,(S&&S.cluster)||'')
+    .replace(/\{master\}/g,p.master||'').replace(/\{node\}/g,p.node||'')
+    .replace(/\{dp\}/g,p.debugPart||'').replace(/\{bp\}/g,p.batchPart||''); }
+
+function curHostLabel(){ return S.host==='local' ? 'local' : S.host; }
+function isMaster(){ return S.host.endsWith('-master'); }
+function isGpu(){ return /-[a-z]\d+$/i.test(S.host); }  // ariel-v/g/k/m/n · moana-r/u/y · aurora-g
+function condaOf(host){ if(!S.conda[host]) S.conda[host]={inited:false,active:false}; return S.conda[host]; }
+function bashrcOf(host){ if(S.bashrc[host]==null) S.bashrc[host]=defaultBashrc(); return S.bashrc[host]; }
+
+/* ---------- 경로 ---------- */
+function expandVars(str){
+  return str.replace(/\$\{?USER\}?/g,S.user).replace(/\$\{?HOME\}?/g,S.env.HOME)
+            .replace(/\$\{?SHELL\}?/g,S.env.SHELL)
+            .replace(/\$\{?(\w+)\}?/g,(m,k)=> S.env[k]!=null?S.env[k]:'');
+}
+function resolve(p){
+  if(p==null||p==='') p=S.cwd;
+  p=expandVars(p);
+  if(p[0]==='~') p=S.env.HOME+p.slice(1);
+  if(p[0]!=='/') p=S.cwd+'/'+p;
+  const parts=p.split('/').filter(x=>x.length);
+  const st=[];
+  for(const seg of parts){ if(seg==='.')continue; if(seg==='..'){st.pop();continue;} st.push(seg); }
+  return '/'+st.join('/');
+}
+function getNode(path){
+  const abs=resolve(path);
+  if(abs==='/') return S.fs;
+  const parts=abs.split('/').filter(x=>x.length);
+  let n=S.fs;
+  for(const seg of parts){ if(!n||n.t!=='dir'||!n.c[seg]) return null; n=n.c[seg]; }
+  return n;
+}
+function parentOf(path){ const abs=resolve(path); const i=abs.lastIndexOf('/');
+  return {dir:abs.slice(0,i)||'/', base:abs.slice(i+1)}; }
+function mkdirp(path){ const parts=resolve(path).split('/').filter(x=>x.length); let n=S.fs;
+  for(const seg of parts){ if(!n.c[seg]) n.c[seg]={t:'dir',c:{}}; n=n.c[seg]; if(n.t!=='dir') return null; } return n; }
+function homeDisp(path){ const h=S.env.HOME; if(path===h) return '~'; if(path.startsWith(h+'/')) return '~'+path.slice(h.length); return path; }
+
+/* ============================ 출력 ============================ */
+let CAP=null; // 리다이렉트(>)가 활성일 때 화면 대신 이 버퍼로 출력을 캡처
+function htmlToText(h){ return String(h).replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&'); }
+function out(html,cls){ if(CAP!==null){ CAP.push(htmlToText(html)); return null; } const div=document.createElement('div'); div.className='line'+(cls?' '+cls:''); div.innerHTML=html; screenEl.appendChild(div); scrollDown(); return div; }
+function outText(t,cls){ out(esc(t),cls); }
+function outLines(t,cls){ let lines=String(t).split('\n'); if(lines.length>1&&lines[lines.length-1]==='') lines.pop(); lines.forEach(l=>out(esc(l)||'&nbsp;',cls)); }
+function scrollDown(){ screenEl.scrollTop=screenEl.scrollHeight; }
+
+function ps1HTML(forHost){
+  const host = forHost||S.host;
+  if(host==='local'){
+    return `<span class="ps1"><span class="u">${S.user}</span><span class="at">@</span><span class="h">my-pc</span><span class="p">:${S.localCwd}</span><span class="dollar">$ </span></span>`;
+  }
+  const c=condaOf(host);
+  const base = c.active ? `<span class="base">(base) </span>` : '';
+  const cwd = homeDisp(S.cwd);
+  return `<span class="ps1">${base}<span class="u">${S.user}</span><span class="at">@</span><span class="h">${host}</span><span class="p">:${esc(cwd)}</span><span class="dollar">$ </span></span>`;
+}
+function renderPrompt(){ ps1El.innerHTML=ps1HTML().replace(/^<span class="ps1">|<\/span>$/,'');
+  // 위 replace는 바깥 span 제거용이지만 안전하게 그대로 innerHTML 사용
+  ps1El.innerHTML=ps1Inner();
+  $('tTitle').textContent = S.host==='local' ? S.user+'@my-pc' : S.user+'@'+S.host;
+  renderTopo();
+}
+function ps1Inner(){
+  const host=S.host;
+  if(host==='local') return `<span class="u">${S.user}</span><span class="at">@</span><span class="h">my-pc</span><span class="p">:${S.localCwd}</span><span class="dollar">$ </span>`;
+  const c=condaOf(host); const base=c.active?`<span class="base">(base) </span>`:'';
+  return `${base}<span class="u">${S.user}</span><span class="at">@</span><span class="h">${host}</span><span class="p">:${esc(homeDisp(S.cwd))}</span><span class="dollar">$ </span>`;
+}
+
+/* ============================ 토폴로지 ============================ */
+function renderTopo(){
+  const hops=[
+    {k:'local',lbl:'내 PC',sub:'Local'},
+    {k:'master',lbl:CLUSTERS[S.cluster].master,sub:'Master · CPU'},
+    {k:'gpu',lbl: (S.alloc?S.alloc.node:'GPU node'),sub:'Computing · GPU'},
+  ];
+  let cur = S.host==='local'?'local': (isGpu()?'gpu':'master');
+  const arrow=`<div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>`;
+  $('topo').innerHTML = hops.map((h,i)=>{
+    const active = h.k===cur ? ' active':'';
+    return `<div class="hop${active}"><span class="dot"></span><span class="lbl"><b>${esc(h.lbl)}</b><span>${h.sub}</span></span></div>`+(i<hops.length-1?arrow:'');
+  }).join('');
+}
+
+/* ============================ 명령 실행 ============================ */
+function echoCommand(raw){ out(ps1Inner()+`<span class="cmd">${esc(raw)}</span>`); }
+
+// 인용부호를 존중하며 토큰화 + 리다이렉트(> >>) 파싱. 빈 인용문("")도 토큰으로 보존.
+function parseSegment(seg){
+  const tokens=[]; let i=0, cur='', started=false, q=null, redir=null;
+  const push=()=>{ if(started||cur!==''){ tokens.push(cur); } cur=''; started=false; };
+  while(i<seg.length){ const ch=seg[i];
+    if(q){ if(ch===q){ q=null; } else { cur+=ch; } started=true; i++; continue; }
+    if(ch==='"'||ch==="'"){ q=ch; started=true; i++; continue; }
+    if(ch==='>'){ // 인용부호 밖의 리다이렉트
+      push(); i++; let app=false; if(seg[i]==='>'){ app=true; i++; }
+      while(i<seg.length && /\s/.test(seg[i])) i++;
+      let fn='', fq=null;
+      while(i<seg.length){ const c2=seg[i];
+        if(fq){ if(c2===fq){ fq=null; } else fn+=c2; i++; continue; }
+        if(c2==='"'||c2==="'"){ fq=c2; i++; continue; }
+        if(/\s/.test(c2)) break; fn+=c2; i++; }
+      redir={file:fn, append:app}; continue;
+    }
+    if(/\s/.test(ch)){ push(); i++; continue; }
+    cur+=ch; started=true; i++;
+  }
+  push();
+  return {tokens, redir};
+}
+function tokenize(str){ return parseSegment(str).tokens; }
+// 간단한 * 글롭 확장 (예: cat logs/slurm-*.out)
+function expandGlob(tok){
+  if(!/\*/.test(tok)) return [tok];
+  const {dir,base}=parentOf(tok); const dn=getNode(dir);
+  if(!dn||dn.t!=='dir') return [tok];
+  let re; try{ re=new RegExp('^'+base.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*')+'$'); }catch(e){ return [tok]; }
+  const matches=Object.keys(dn.c).filter(n=>n[0]!=='.'&&re.test(n)).sort();
+  if(!matches.length) return [tok];
+  const prefix=tok.slice(0, tok.length-base.length);
+  return matches.map(m=>prefix+m);
+}
+function writeRedirect(file,content,append){
+  const {dir,base}=parentOf(file); const dn=getNode(dir);
+  if(!dn||dn.t!=='dir'){ out(`<span class="c-err">${esc(file)}: No such file or directory</span>`); return; }
+  const existing=dn.c[base];
+  if(append && existing && existing.t==='file') existing.content += (content?content+'\n':'');
+  else dn.c[base]={t:'file',content: content?content+'\n':''};
+}
+
+function afterCommand(raw){ renderPrompt(); evaluateLessons(); saveProgress(); }
+function renderIfActive(){ renderPrompt(); renderTopo(); evaluateLessons(); saveProgress(); }
+
+/* ============================ 명령어 구현 ============================ */
+const COMMANDS={};
+function def(names,fn){ (Array.isArray(names)?names:[names]).forEach(n=>COMMANDS[n]=fn); }
+
+/* ----- 기본 파일 ----- */
+def('pwd',(a,ctx)=>{ const v = S.host==='local'? '/Users/'+S.user : S.cwd; ctx.emit?ctx.emit(v):outText(v); });
+def('whoami',(a,ctx)=>{ ctx.emit?ctx.emit(S.user):outText(S.user); });
+def(['hostname'],(a,ctx)=>{ const h=S.host==='local'?'my-pc':S.host; ctx.emit?ctx.emit(h):outText(h); });
+def('echo',(a,ctx)=>{ const s=a.join(' '); ctx.emit?ctx.emit(s):outText(s); });
+def(['clear','cls'],()=>{ screenEl.innerHTML=''; });
+def('date',(a,ctx)=>{ const s='Sun Jul 20 14:32:07 KST 2025'; ctx.emit?ctx.emit(s):outText(s); });
+
+def('cd',(a)=>{
+  if(S.host==='local'){ outText('로컬 PC에서는 실습이 제한됩니다. 먼저 ssh 로 Seraph에 접속하세요.','c-dim'); return; }
+  let target=a[0]||'~';
+  if(target==='-'){ target=S.env.HOME; }
+  const node=getNode(target);
+  if(!node){ out(`<span class="c-err">cd: ${esc(target)}: No such file or directory</span>`); return false; }
+  if(node.t!=='dir'){ out(`<span class="c-err">cd: ${esc(target)}: Not a directory</span>`); return false; }
+  S.cwd=resolve(target);
+});
+
+def('ls',(a,ctx)=>{
+  if(S.host==='local'){ outText('Desktop  Documents  Downloads','c-dim'); return; }
+  const flags=a.filter(x=>x[0]==='-').join('');
+  const long=flags.includes('l'), all=flags.includes('a');
+  let paths=a.filter(x=>x[0]!=='-'); if(paths.length===0) paths=['.'];
+  paths.forEach((p,idx)=>{
+    const node=getNode(p);
+    if(!node){ out(`<span class="c-err">ls: cannot access '${esc(p)}': No such file or directory</span>`); return; }
+    if(paths.length>1) out(`${esc(p)}:`);
+    if(node.t==='file'){ out(colorName(parentOf(p).base,node)); return; }
+    let names=Object.keys(node.c);
+    if(!all) names=names.filter(n=>n[0]!=='.');
+    if(all){ names=['.','..'].concat(names); }
+    names.sort();
+    if(long){
+      names.forEach(nm=>{
+        const cn = nm==='.'?node : nm==='..'?node : node.c[nm];
+        const isdir=cn&&cn.t==='dir'; const exe=cn&&cn.exe;
+        const perm=isdir?'drwxr-xr-x':(exe?'-rwxr-xr-x':'-rw-r--r--');
+        const sz=cn&&cn.t==='file'?(cn.size||cn.content.length):4096;
+        out(`${perm} ${S.user} ${S.user} ${String(humanSize(sz)).padStart(7)} Jul 20 14:30 ${colorName(nm,cn)}`);
+      });
+    } else {
+      out(names.map(nm=>colorName(nm, nm==='.'||nm==='..'?{t:'dir'}:node.c[nm])).join('  ')||'&nbsp;');
+    }
+    if(idx<paths.length-1) out('&nbsp;');
+  });
+});
+function colorName(nm,node){
+  if(!node) return esc(nm);
+  if(node.t==='dir') return `<span class="c-dir">${esc(nm)}</span>`;
+  if(node.exe) return `<span class="c-exe">${esc(nm)}</span>`;
+  if(/\.(tar|gz|zip|tgz)$/.test(nm)) return `<span class="c-warn">${esc(nm)}</span>`;
+  return esc(nm);
+}
+function humanSize(n){ if(n<1024)return n+''; const u=['K','M','G','T']; let i=-1; do{n/=1024;i++;}while(n>=1024&&i<3); return n.toFixed(n<10?1:0)+u[i]; }
+
+def('mkdir',(a)=>{
+  const dirs=a.filter(x=>x[0]!=='-'); const p=a.includes('-p')||a.some(x=>/^-\w*p/.test(x));
+  if(dirs.length===0){ out(`<span class="c-err">mkdir: missing operand</span>`); return false; }
+  dirs.forEach(d=>{ const {dir,base}=parentOf(d); const dn=getNode(dir);
+    if(p){ mkdirp(d); return; }
+    if(!dn||dn.t!=='dir'){ out(`<span class="c-err">mkdir: cannot create directory '${esc(d)}': No such file or directory</span>`); return; }
+    if(dn.c[base]){ out(`<span class="c-err">mkdir: cannot create directory '${esc(d)}': File exists</span>`); return; }
+    dn.c[base]={t:'dir',c:{}}; });
+});
+def('touch',(a)=>{ a.filter(x=>x[0]!=='-').forEach(f=>{ const {dir,base}=parentOf(f); const dn=getNode(dir);
+  if(!dn||dn.t!=='dir'){ out(`<span class="c-err">touch: cannot touch '${esc(f)}': No such file or directory</span>`); return; }
+  if(!dn.c[base]) dn.c[base]={t:'file',content:''}; }); });
+
+def('rm',(a)=>{
+  const rec=a.some(x=>/^-\w*[rR]/.test(x)); const targets=a.filter(x=>x[0]!=='-');
+  if(targets.length===0){ out(`<span class="c-err">rm: missing operand</span>`); return false; }
+  targets.forEach(t=>{ const {dir,base}=parentOf(t); const dn=getNode(dir); const node=dn&&dn.c[base];
+    if(!node){ out(`<span class="c-err">rm: cannot remove '${esc(t)}': No such file or directory</span>`); return; }
+    if(node.t==='dir'&&!rec){ out(`<span class="c-err">rm: cannot remove '${esc(t)}': Is a directory</span>`); return; }
+    if(resolve(t)==='/data'||resolve(t)==='/home'){ out(`<span class="c-err">rm: 위험한 경로입니다. 시뮬레이터가 보호합니다.</span>`); return; }
+    delete dn.c[base]; });
+});
+def(['cp'],(a)=>{
+  const rec=a.some(x=>/^-\w*[rR]/.test(x)); const ps=a.filter(x=>x[0]!=='-');
+  if(ps.length<2){ out(`<span class="c-err">cp: missing destination file operand</span>`); return false; }
+  const dest=ps.pop();
+  ps.forEach(src=>{ const sn=getNode(src);
+    if(!sn){ out(`<span class="c-err">cp: cannot stat '${esc(src)}': No such file or directory</span>`); return; }
+    if(sn.t==='dir'&&!rec){ out(`<span class="c-err">cp: -r not specified; omitting directory '${esc(src)}'</span>`); return; }
+    const dn=getNode(dest);
+    let dir,base;
+    if(dn&&dn.t==='dir'){ dir=dest; base=parentOf(src).base; } else { const pp=parentOf(dest); dir=pp.dir; base=pp.base; }
+    const dparent=getNode(dir); if(!dparent||dparent.t!=='dir'){ out(`<span class="c-err">cp: cannot create '${esc(dest)}': No such file or directory</span>`); return; }
+    dparent.c[base]=JSON.parse(JSON.stringify(sn)); });
+});
+def('mv',(a)=>{
+  const ps=a.filter(x=>x[0]!=='-'); if(ps.length<2){ out(`<span class="c-err">mv: missing destination file operand</span>`); return false; }
+  const dest=ps.pop();
+  ps.forEach(src=>{ const {dir,base}=parentOf(src); const sp=getNode(dir); const node=sp&&sp.c[base];
+    if(!node){ out(`<span class="c-err">mv: cannot stat '${esc(src)}': No such file or directory</span>`); return; }
+    const dn=getNode(dest); let ddir,dbase;
+    if(dn&&dn.t==='dir'){ ddir=dest; dbase=base; } else { const pp=parentOf(dest); ddir=pp.dir; dbase=pp.base; }
+    const dparent=getNode(ddir); if(!dparent||dparent.t!=='dir'){ out(`<span class="c-err">mv: cannot move to '${esc(dest)}'</span>`); return; }
+    dparent.c[dbase]=node; delete sp.c[base]; });
+});
+
+def('cat',(a,ctx)=>{
+  const files=a.filter(x=>x[0]!=='-'); if(files.length===0){ out('cat: 파일명을 입력하세요','c-dim'); return; }
+  files.forEach(fp=>{
+    if(resolve(fp)==='/home/'+S.user+'/.bashrc' || resolve(fp)===S.env.HOME+'/.bashrc'){
+      const b=bashrcOf(S.host); ctx.emit?ctx.emit(b):outLines(b); return;
+    }
+    const node=getNode(fp);
+    if(!node){ out(`<span class="c-err">cat: ${esc(fp)}: No such file or directory</span>`); return; }
+    if(node.t==='dir'){ out(`<span class="c-err">cat: ${esc(fp)}: Is a directory</span>`); return; }
+    ctx.emit?ctx.emit(node.content):outLines(node.content);
+  });
+});
+def('head',(a,ctx)=>headtail(a,ctx,true));
+def('tail',(a,ctx)=>headtail(a,ctx,false));
+function headtail(a,ctx,head){ let n=10; const ni=a.indexOf('-n'); if(ni>=0){ const v=parseInt(a[ni+1],10); if(!isNaN(v)) n=Math.max(0,v); }
+  const files=a.filter((x,i)=>x[0]!=='-'&&!(i===ni+1&&ni>=0)); const fp=files[0];
+  const node=getNode(fp); if(!node||node.t!=='file'){ out(`<span class="c-err">${head?'head':'tail'}: ${esc(fp||'')}: No such file or directory</span>`); return; }
+  let lines=node.content.split('\n'); if(lines[lines.length-1]==='')lines.pop();
+  lines = head?lines.slice(0,n):lines.slice(-n);
+  const t=lines.join('\n'); ctx.emit?ctx.emit(t):outLines(t);
+}
+def('wc',(a,ctx)=>{ const fp=a.filter(x=>x[0]!=='-')[0]; const node=getNode(fp);
+  if(!node||node.t!=='file'){ out(`<span class="c-err">wc: ${esc(fp||'')}: No such file or directory</span>`); return; }
+  const lines=node.content.split('\n').length-1, words=(node.content.match(/\S+/g)||[]).length, chars=node.content.length;
+  const s=`${String(lines).padStart(6)} ${String(words).padStart(6)} ${String(chars).padStart(6)} ${fp}`;
+  ctx.emit?ctx.emit(s):outText(s); });
+
+def('grep',(a,ctx)=>{
+  const flags=a.filter(x=>x[0]==='-').join(''); const ic=flags.includes('i'), ln=flags.includes('n');
+  const rest=a.filter(x=>x[0]!=='-'); const pat=rest[0]; const files=rest.slice(1);
+  if(!pat){ out('usage: grep PATTERN FILE','c-dim'); return; }
+  let re; try{ re=new RegExp(pat, ic?'i':''); }catch(e){ re=new RegExp(pat.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), ic?'i':''); }
+  const scan=(fp)=>{ const node=getNode(fp); if(!node||node.t!=='file') return;
+    node.content.split('\n').forEach((l,i)=>{ if(re.test(l)){ const hl=esc(l).replace(re, m=>`<span class="c-err b">${esc(m)}</span>`);
+      out((files.length>1?`<span class="c-mag">${esc(fp)}</span>:`:'')+(ln?`<span class="c-ok">${i+1}</span>:`:'')+hl); } }); };
+  if(files.length===0){ out('grep: 파일을 지정하세요 (시뮬레이터는 파이프 입력 미지원)','c-dim'); return; }
+  files.forEach(scan);
+});
+def('which',(a,ctx)=>{ const prog=a.filter(x=>x[0]!=='-')[0];
+  if(prog==='python'||prog==='python3'||prog==='pip'){ const c=condaOf(S.host);
+    let path;
+    if(c.active && c.env==='public') path='/data/opt/anaconda3/bin/'+prog;
+    else if(c.active) path='/data/'+S.user+'/anaconda3/bin/'+prog;
+    else path='/usr/bin/'+prog;
+    ctx.emit?ctx.emit(path):outText(path); return; }
+  const known={conda:'/data/'+S.user+'/anaconda3/bin/conda',bash:'/usr/bin/bash',ls:'/usr/bin/ls',git:'/usr/bin/git',
+    vim:'/usr/bin/vim',srun:'/usr/bin/srun',sbatch:'/usr/bin/sbatch',squeue:'/usr/bin/squeue'};
+  if(known[prog]){ ctx.emit?ctx.emit(known[prog]):outText(known[prog]); }
+  else { if(!ctx.emit) outText(''); }
+});
+
+def('tree',(a)=>{
+  const root=a.filter(x=>x[0]!=='-')[0]||'.'; const node=getNode(root);
+  if(!node){ out(`<span class="c-err">${esc(root)}: No such file or directory</span>`); return; }
+  out(colorName(homeDisp(resolve(root)),node));
+  let dc=0,fc=0;
+  const walk=(n,prefix)=>{ if(n.t!=='dir')return; const keys=Object.keys(n.c).filter(k=>k[0]!=='.').sort();
+    keys.forEach((k,i)=>{ const last=i===keys.length-1; const child=n.c[k];
+      out(prefix+(last?'└── ':'├── ')+colorName(k,child));
+      if(child.t==='dir'){ dc++; walk(child, prefix+(last?'    ':'│   ')); } else fc++; }); };
+  walk(node,''); out(`&nbsp;`); out(`${dc} directories, ${fc} files`,'c-dim');
+});
+def('find',(a)=>{
+  const root=a[0]&&a[0][0]!=='-'?a[0]:'.'; const ni=a.indexOf('-name'); const pat=ni>=0?a[ni+1]:null;
+  const rn=getNode(root); if(!rn){ out(`<span class="c-err">find: '${esc(root)}': No such file or directory</span>`); return; }
+  let re=null;
+  if(pat){ try{ re=new RegExp('^'+pat.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.')+'$'); }catch(e){ re=null; } }
+  const base=resolve(root);
+  const walk=(n,path)=>{ const nm=path.split('/').pop()||path;
+    if(!re||re.test(nm)) out(esc(path));
+    if(n.t==='dir') Object.keys(n.c).sort().forEach(k=> walk(n.c[k], (path==='/'?'':path)+'/'+k)); };
+  walk(rn, base==='/'?'':base||root);
+});
+
+/* ----- 환경 / 셸 ----- */
+def('env',(a,ctx)=>{ const lines=Object.entries(S.env).map(([k,v])=>`${k}=${v}`);
+  const c=condaOf(S.host); if(c.active) lines.push('CONDA_DEFAULT_ENV='+(c.env==='public'?'pytorch1.12.1_p38':'base'));
+  ctx.emit?ctx.emit(lines.join('\n')):outLines(lines.join('\n')); });
+def('export',(a)=>{ a.forEach(kv=>{ const m=kv.match(/^(\w+)=(.*)$/); if(m){ S.env[m[1]]=expandVars(m[2]); } }); });
+def(['set'],(a,ctx)=>{ if(a.length===0){ COMMANDS.env([],ctx); } });
+def(['source','.'],(a)=>{
+  const f=a[0]||''; const abs=resolve(f);
+  if(abs===S.env.HOME+'/.bashrc' || abs==='/home/'+S.user+'/.bashrc'){
+    const b=bashrcOf(S.host); const c=condaOf(S.host);
+    if(/conda initialize/.test(b) && c.inited){ c.active=true; if(!c.env) c.env='private';
+      // (base) 활성화 — 조용히
+    }
+    return;
+  }
+  const node=getNode(f); if(!node){ out(`<span class="c-err">-bash: ${esc(f)}: No such file or directory</span>`); }
+});
+def('history',(a,ctx)=>{ const t=S.history.map((h,i)=>`${String(i+1).padStart(5)}  ${h}`).join('\n'); ctx.emit?ctx.emit(t):outLines(t); });
+def(['alias','unalias'],()=>{});
+def(['chmod','chown','chgrp','ln'],()=>{ /* no-op(성공) */ });
+
+/* ----- 모니터 ----- */
+def('nvidia-smi',(a)=>{
+  const q=a.join(' ');
+  if(S.host==='local'){ out(`<span class="c-err">nvidia-smi: command not found</span>`); return; }
+  if(isMaster()){ out('No devices were found','c-warn');
+    out('master 노드에는 GPU가 없습니다. srun/sbatch 로 GPU 노드를 확보하세요.','c-dim'); return; }
+  const info=nodeInfo(S.host);
+  if(!info||!info.gpus){ out('No devices were found','c-warn');
+    out('이 노드에는 GPU가 없습니다.','c-dim'); return; }
+  const n=(S.alloc&&S.alloc.node===S.host)?S.alloc.gpus:info.gpus;
+  if(/--query-gpu/.test(q)){
+    out('timestamp, name, utilization.gpu [%], memory.used [MiB]','c-dim');
+    for(let i=0;i<n;i++) out(`2025/07/20 14:32:10.123, ${info.model}, 87 %, ${(2100+i*40)} MiB`);
+    out('(-l 1: 1초마다 갱신 — 시뮬레이터에서는 1회 출력 후 종료)','c-dim'); return;
+  }
+  printNvidiaSmi(info, n);
+});
+function nodeInfo(host){ const cl=CLUSTERS[S.cluster]; return cl.nodes.find(x=>x.name===host)||{model:'RTX 3090',mem:24,gpus:8}; }
+function printNvidiaSmi(info,n){
+  out('+-----------------------------------------------------------------------------+');
+  out('| NVIDIA-SMI 535.104.05   Driver Version: 535.104.05   CUDA Version: 12.2     |');
+  out('|-------------------------------+----------------------+----------------------+');
+  out('| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |');
+  out('| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |');
+  out('|===============================+======================+======================|');
+  for(let i=0;i<n;i++){
+    out(`|   ${i}  ${info.model.padEnd(11)}    Off | 00000000:1${i}:00.0 Off |                  N/A |`);
+    out(`| 41%   58C    P2   180W / 350W|   2148MiB / ${info.mem*1024}MiB |     87%      Default |`);
+    out('+-------------------------------+----------------------+----------------------+');
+  }
+  out('&nbsp;');
+  out('+-----------------------------------------------------------------------------+');
+  out('| Processes:                                                                  |');
+  out('|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |');
+  out('|=============================================================================|');
+  out(`|    0   N/A  N/A     31337      C   python                            2140MiB |`);
+  out('+-----------------------------------------------------------------------------+');
+}
+def('htop',()=>{ printHtop(S.host); });
+def('top',()=>{ printHtop(S.host); });
+function printHtop(host){
+  out(`<span class="c-ok">  1  [||||||||          25.4%]</span>   Tasks: 182, 431 thr; 2 running`);
+  out(`<span class="c-ok">  2  [|||||             14.1%]</span>   Load average: 1.24 0.98 0.72`);
+  out(`<span class="c-ok">  3  [||||||||||||      42.0%]</span>   Uptime: 12 days, 04:31:22`);
+  out(`  Mem[|||||||||||        38.2G/128G]`);
+  out(`  Swp[                    0K/8.00G]`);
+  out('&nbsp;');
+  out('  PID USER      PRI  NI  VIRT   RES   S CPU% MEM%   TIME+  Command','c-dim');
+  out(`31337 ${S.user}   20   0 24.1G  2.1G   R 187. 1.7  4:12.88 python train.py`);
+  out(`  912 root      20   0  912M   88M   S  0.0 0.1  0:04.01 slurmd`);
+  out('(q 를 누르면 종료 — 시뮬레이터는 스냅샷만 표시)','c-dim');
+}
+def('df',(a)=>{
+  out('Filesystem            Size  Used Avail Use% Mounted on','c-dim');
+  out('nas-server:/data       420T  318T  102T  76% /data');
+  out('/dev/nvme0n1           7.0T  1.2T  5.8T  18% /local_datasets');
+  out('/dev/sda2              220G   84G  136G  39% /home');
+});
+def('du',(a)=>{ const p=a.filter(x=>x[0]!=='-')[0]||'.'; const n=getNode(p);
+  if(!n){ out(`<span class="c-err">du: cannot access '${esc(p)}': No such file or directory</span>`); return; }
+  out('4.0K\t'+esc(resolve(p))); });
+def('free',()=>{ out('              total        used        free','c-dim');
+  out('Mem:      131072000    39124992    91947008'); });
+
+/* ----- 통신 ----- */
+def('ssh',(a)=>{
+  // ssh [-t] [-p PORT] [user@]host [command...]
+  const nonFlags=[];
+  for(let i=0;i<a.length;i++){ const x=a[i];
+    if(x==='-p'){ i++; continue; }   // 포트 값 건너뜀
+    if(x[0]==='-') continue;         // -t 등 기타 플래그
+    nonFlags.push(x); }
+  const target=nonFlags[0]; const remoteCmd=nonFlags.slice(1).join(' ');
+  if(!target){ out(`usage: ssh [user@]host [command]`,'c-dim'); return false; }
+  let host=target.includes('@')?target.split('@')[1]:target;
+  host=host.replace(/\.khu\.ac\.kr$/,'').replace(/^.*@/,'');
+  // 마스터 접속
+  const clusterKey = ['moana','ariel','aurora'].find(k=> host.includes(k));
+  if(/master$/.test(host) || /^(moana|ariel|aurora)$/.test(host)){
+    const ck=clusterKey||S.cluster; S.cluster=ck;
+    if(S.host==='local'){
+      bootConnect(CLUSTERS[ck].master);
+    } else {
+      // 이미 클러스터 내부 -> 마스터로 이동
+      S.host=CLUSTERS[ck].master; S.cwd=S.env.HOME; ensureMasterConda();
+      out(`Last login: Sun Jul 20 14:20:01 2025 from 163.180.160.2`,'c-dim');
+    }
+    return;
+  }
+  // 계산 노드에 원격 명령 (ssh node cmd) — 잡 모니터링 용도
+  const cl=CLUSTERS[S.cluster]; const nodeExists=cl.nodes.find(n=>n.name===host);
+  if(!nodeExists){ out(`<span class="c-err">ssh: Could not resolve hostname ${esc(host)}: Name or service not known</span>`); return false; }
+  if(!remoteCmd){ out(`<span class="c-warn">${host} 에 인터랙티브 접속은 시뮬레이터에서 지원하지 않습니다. \`ssh ${host} nvidia-smi\` 처럼 원격 명령을 붙여보세요.</span>`); return; }
+  // 원격에서 nvidia-smi / htop 실행
+  const savedHost=S.host; S.host=host;
+  if(/nvidia-smi/.test(remoteCmd)){ COMMANDS['nvidia-smi'](remoteCmd.split(/\s+/).slice(1),{raw:remoteCmd}); }
+  else if(/htop|top/.test(remoteCmd)){ printHtop(host); }
+  else { out(`${host}: 원격 명령 '${esc(remoteCmd)}' 실행(시뮬레이터 생략)`,'c-dim'); }
+  S.host=savedHost;
+});
+def(['scp','sftp','rsync'],(a,ctx)=>{ out(`${ctx.name}: 파일 전송 명령입니다. 시뮬레이터에서는 동작을 생략합니다(개념 학습용).`,'c-dim'); });
+def(['wget'],(a)=>{ const url=a.find(x=>/^https?:/.test(x))||a[a.length-1]||'';
+  const fname=(url.split('/').pop()||'index.html')||'download';
+  out(`--2025-07-20 14:32:40--  ${esc(url)}`,'c-dim');
+  out(`Resolving repo.anaconda.com... 104.16.131.3`,'c-dim');
+  out(`HTTP request sent, awaiting response... 200 OK`,'c-dim');
+  out(`Length: 763262309 (728M) [application/octet-stream]`,'c-dim');
+  out(`Saving to: '${esc(fname)}'`,'c-dim');
+  out(`${fname}   100%[===================>] 728.0M  38.4MB/s   in 19s`,'c-ok');
+  const {dir,base}=parentOf(fname); const dn=getNode(dir)||getNode('.'); (dn||S.fs).c&&( (getNode('.')).c[base]={t:'file',content:'<<installer>>',size:763262309,exe:true} );
+});
+def(['curl'],(a)=>{ out('curl: (시뮬레이터) 네트워크 요청 생략','c-dim'); });
+
+/* ----- 에디터 ----- */
+def(['vim','vi','nano'],(a)=>{
+  const f=a.filter(x=>x[0]!=='-')[0];
+  if(!f){ out(`${'vim'}: 파일명을 입력하세요 (예: vim hello.py)`,'c-dim'); return; }
+  openEditor(f);
+});
+
+/* ----- python / bash ----- */
+def(['python','python3'],(a)=>{
+  const file=a.filter(x=>x[0]!=='-')[0];
+  if(isMaster()){ out(`<span class="c-warn">⚠ master 노드에서는 무거운 연산을 실행하면 안 됩니다 (Dos & Don'ts).</span>`);
+    out(`  srun 으로 GPU 노드를 확보한 뒤 실행하세요. — 데모로 결과만 출력합니다.`,'c-dim'); }
+  if(!file){ out('Python 3.8.13 (default) :: Anaconda, Inc.','c-dim'); out('(대화형 인터프리터는 시뮬레이터에서 생략)','c-dim'); return; }
+  const node=getNode(file);
+  if(!node||node.t!=='file'){ out(`<span class="c-err">python: can't open file '${esc(file)}': [Errno 2] No such file or directory</span>`); return false; }
+  runPython(node.content);
+});
+function runPython(src){
+  // 아주 단순한 시뮬레이션: print(...) 만 처리
+  const lines=src.split('\n');
+  for(const l of lines){
+    let m=l.match(/^\s*print\((.*)\)\s*$/); if(!m) continue;
+    let arg=m[1].trim();
+    if(/^['"].*['"]$/.test(arg)){ out(esc(arg.slice(1,-1))); }
+    else if(/np\.arange\((\d+)\)/.test(arg)){ const k=+RegExp.$1; out('['+Array.from({length:k},(_,i)=>i).join(' ')+']'); }
+    else out(esc(arg));
+  }
+}
+def(['bash','sh'],(a)=>{ const f=a.filter(x=>x[0]!=='-')[0]; const node=getNode(f);
+  if(!node){ out(`<span class="c-err">bash: ${esc(f||'')}: No such file or directory</span>`); return; }
+  // 스크립트 내 python 실행 흉내
+  node.content.split('\n').forEach(l=>{ const m=l.match(/^\s*python3?\s+(\S+)/); if(m){ const pn=getNode(m[1]); if(pn)runPython(pn.content); } }); });
+
+def('tar',(a)=>{
+  const extract=a.some(x=>/x/.test(x)&&x[0]==='-'); const verbose=a.some(x=>/v/.test(x)&&x[0]==='-');
+  const fi=a.findIndex(x=>/f/.test(x)&&x[0]==='-'); const file=a[fi+1];
+  const ci=a.indexOf('-C'); const dest=ci>=0?a[ci+1]:'.';
+  if(!extract){ out('tar: 시뮬레이터는 -x(추출)만 지원합니다','c-dim'); return; }
+  const node=getNode(file); if(!node){ out(`<span class="c-err">tar: ${esc(file||'')}: Cannot open: No such file or directory</span>`); return false; }
+  const destNode=getNode(dest); if(!destNode||destNode.t!=='dir'){ out(`<span class="c-err">tar: ${esc(dest)}: No such directory</span>`); return false; }
+  const base=(file.split('/').pop()||'archive').replace(/\.tar(\.gz)?$/,'');
+  const files=['train/','train/img_0001.JPEG','train/img_0002.JPEG','val/','val/val_0001.JPEG','meta.bin'];
+  const folder={t:'dir',c:{}}; files.forEach(f=>{ if(f.endsWith('/'))folder.c[f.slice(0,-1)]={t:'dir',c:{}}; else{ const parts=f.split('/'); if(parts.length===2){ folder.c[parts[0]]=folder.c[parts[0]]||{t:'dir',c:{}}; folder.c[parts[0]].c[parts[1]]={t:'file',content:'...'} } else folder.c[f]={t:'file',content:'...'} } });
+  destNode.c[base]=folder;
+  if(verbose) files.forEach(f=>out(`${base}/${f}`));
+  if(resolve(dest).startsWith('/local_datasets')) out(`<span class="c-ok">✓ /local_datasets 로 추출 완료 — 이제 학습 시 NAS에 부담을 주지 않습니다.</span>`);
+  else if(resolve(dest).startsWith('/data')) out(`<span class="c-warn">⚠ /data(NAS)에 추출했습니다. 학습용은 /local_datasets/ 로 푸는 것을 권장합니다.</span>`);
+});
+
+/* ----- conda ----- */
+def('conda',(a)=>{ const c=condaOf(S.host);
+  if(isGpu()&&!c.inited){ out(`<span class="c-err">conda: command not found</span>`);
+    out('이 계산 노드에는 conda 가 아직 없습니다 (~/.bashrc 는 노드 로컬, NAS 밖). 절대경로로 초기화하세요:','c-dim');
+    out(`  /data/${S.user}/anaconda3/bin/conda init  →  source ~/.bashrc`,'c-dim'); return false; }
+  handleConda(a, null); });
+function handleConda(a, explicitPath){
+  const sub=a[0];
+  if(sub==='init'){ const c=condaOf(S.host); c.inited=true;
+    const isPublic = explicitPath && explicitPath.includes('/opt/');
+    c.pendingEnv = isPublic?'public':'private';
+    let b=bashrcOf(S.host);
+    if(!/conda initialize/.test(b)){ b += `\n# >>> conda initialize >>>\n__conda_setup="$('${explicitPath||'/data/'+S.user+'/anaconda3/bin/conda'}' 'shell.bash' 'hook' 2>/dev/null)"\neval "$__conda_setup"\n# <<< conda initialize <<<\n`; S.bashrc[S.host]=b; }
+    out('no change     '+ (explicitPath||'/data/'+S.user+'/anaconda3')+'/condabin/conda','c-dim');
+    out('modified      /home/'+S.user+'/.bashrc','c-ok');
+    out('&nbsp;');
+    out("==> For changes to take effect, close and re-open your current shell. <==",'c-dim');
+    out('  → 지금은 `source ~/.bashrc` 를 실행하면 바로 적용됩니다.','c-dim');
+    return;
+  }
+  if(sub==='activate'){ const c=condaOf(S.host); if(!c.inited){ out(`<span class="c-err">CondaError: Run 'conda init' before 'conda activate'</span>`); return; }
+    c.active=true; c.env = a[1]&&a[1].includes('pytorch')?'public':(c.pendingEnv||'private'); return; }
+  if(sub==='deactivate'){ const c=condaOf(S.host); c.active=false; return; }
+  if(sub==='env'&&a[1]==='list' || sub==='info'&&a.includes('--envs')){
+    out('# conda environments:','c-dim'); out('#'); out('base                  *  /data/'+S.user+'/anaconda3');
+    out('pytorch1.12.1_p38        /data/opt/anaconda3/envs/pytorch1.12.1_p38'); return; }
+  if(sub==='install'||sub==='create'){
+    const c=condaOf(S.host);
+    if(c.env==='public'){ out(`<span class="c-err">✗ DO NOT install here! Public anaconda(/data/opt)에는 설치 금지입니다.</span>`);
+      out('  NAS 밖에 설치되어 계산 노드에서 접근 불가해집니다. Private anaconda를 쓰세요.','c-dim'); return; }
+    out(`Collecting package metadata: done`,'c-dim'); out(`Solving environment: done`,'c-dim'); out(`<span class="c-ok">✓ (시뮬레이터) 설치 완료</span>`); return; }
+  out(`conda ${esc(sub||'')}: (시뮬레이터) 지원하지 않는 하위명령`,'c-dim');
+}
+// "/data/$USER/anaconda3/bin/conda init" 같은 절대경로 호출 처리
+function tryAbsoluteConda(name,argv){
+  if(/\/conda$/.test(name)){ handleConda(argv, name.replace(/\/bin\/conda$/,'')+'/bin/conda'); return true; }
+  if(/\/(python|pip)3?$/.test(name)){ // 절대경로 파이썬
+    return false; }
+  return false;
+}
+
+/* ----- Slurm 공통: 로컬 PC에서 실행 방지 ----- */
+function localGuard(name){ if(S.host==='local'){ out(`<span class="c-err">${name}: command not found</span>`); out('먼저 ssh 로 master 노드에 접속하세요.','c-dim'); return true; } return false; }
+
+/* ----- Slurm: slurm-gres-viz ----- */
+// 정렬 옵션. 기본은 노드 나열 순(=이름 순)이고, 실제로 쓸 노드를 고를 땐 가용 순이 편하다.
+const VIZ_SORTS = {
+  node:  { label:'노드 순(기본)',   cmp:null },
+  name:  { label:'이름 순',         cmp:(x,y)=>vizByName(x,y) },
+  free:  { label:'가용 많은 순',    cmp:(x,y)=> y.free-x.free || vizByName(x,y) },
+  used:  { label:'사용 많은 순',    cmp:(x,y)=> y.used-x.used || vizByName(x,y) },
+  total: { label:'GPU 많은 순',     cmp:(x,y)=> y.total-x.total || vizByName(x,y) },
+};
+const VIZ_ALIAS = { node:'node', name:'name', free:'free', avail:'free', available:'free', 가용:'free',
+                    used:'used', busy:'used', 사용:'used', total:'total', gpus:'total' };
+function vizByName(x,y){ return x.n.name.localeCompare(y.n.name, undefined, {numeric:true}); }
+function parseVizOpts(a){
+  const o={ sort:'node', reverse:false, bad:null };
+  (a||[]).forEach((tk,i)=>{
+    let m;
+    if(m=tk.match(/^--sort=(.*)$/))      o.sort = VIZ_ALIAS[m[1].toLowerCase()] || (o.bad=m[1], o.sort);
+    else if(tk==='--sort'||tk==='-s'){ const v=String(a[i+1]||'').toLowerCase();
+                                       o.sort = VIZ_ALIAS[v] || (o.bad=a[i+1]||'', o.sort); }
+    else if(tk==='-r'||tk==='--reverse') o.reverse=true;
+  });
+  return o;
+}
+def(['slurm-gres-viz'],(a)=>{
+  if(localGuard('slurm-gres-viz')) return false;
+  const o=parseVizOpts(a);
+  const cl=CLUSTERS[S.cluster];
+  const rows=cl.nodes.filter(n=>n.type==='gpu').map(n=>{
+    const u=gpuUsed(n.name); return { n, used:u, total:n.gpus, free:n.gpus-u };
+  });
+  let tot=0, used=0, hpFree=0;
+  rows.forEach(r=>{ tot+=r.total; used+=r.used; if(r.n.hp) hpFree+=r.free; });
+  const free=tot-used, stdFree=free-hpFree;
+  const cmp=(VIZ_SORTS[o.sort]||VIZ_SORTS.node).cmp;
+  if(cmp) rows.sort(cmp);
+  if(o.reverse) rows.reverse();
+
+  out(`<span class="c-acc b">GPU 현황 · ${cl.label}</span>`);
+  out(`  사용 가능 <span class="c-ok">${free}</span> / 전체 ${tot}  (고성능 ${hpFree} · 일반 ${stdFree})`);
+  if(o.bad!=null) out(`  <span class="c-warn">알 수 없는 정렬 키 '${esc(o.bad)}' — 기본 정렬을 씁니다. 가능: ${Object.keys(VIZ_SORTS).join(', ')}</span>`);
+  out('&nbsp;');
+  out(` 노드          모델           가용/전체        <span class="c-dim">정렬: ${VIZ_SORTS[o.sort].label}${o.reverse?' (역순)':''}</span>`, 'c-dim');
+  rows.forEach(({n,used:u,total,free:fr})=>{
+    // ▓ = 사용가능(가용), ░ = 사용중. GUI(App.jsx)와 동일하게 ▓ 개수가 '가용' 숫자와 일치한다.
+    let bar=''; for(let i=0;i<total;i++) bar+= i<fr?'<span class="c-ok">▓</span>':'<span class="blk-f">░</span>';
+    const col=fr===0?'c-err':fr<=2?'c-warn':'c-ok';
+    const tag=n.hp?'<span class="c-dim"> ·고성능</span>':'';
+    out(`  ${n.name.padEnd(12)} ${n.model.padEnd(13)} <span class="${col}">${String(fr).padStart(2)}/${total}</span>  ${bar}${tag}`);
+  });
+  out('&nbsp;');
+  out('▓ 사용가능  ░ 사용중  ·  고성능(k/m/n)은 별도 신청자만 · -i: interactive(1회 스냅샷)','c-dim');
+  out('정렬: <span class="c-acc">--sort=free</span> 가용 많은 순 · <span class="c-acc">used</span> · <span class="c-acc">name</span> · <span class="c-acc">total</span> · <span class="c-acc">-r</span> 역순','c-dim');
+});
+function gpuUsed(name){ const total=nodeInfo(name).gpus; let base=S.gpuUse[name]; if(base==null){ base=seededUse(name,total); S.gpuUse[name]=base; }
+  // 내 srun/sbatch 잡이 이 노드를 쓰면 가산
+  let mine=0; if(S.alloc&&S.alloc.node===name) mine+=S.alloc.gpus;
+  S.jobs.forEach(j=>{ if(j.st==='R'&&j.node===name&&j.kind==='batch') mine+=j.gpus; });
+  return Math.min(total, base+mine); }
+
+/* ----- Slurm: srun ----- */
+def('srun',(a)=>{
+  if(S.host==='local'){ out(`<span class="c-err">srun: command not found</span>`); out('먼저 ssh 로 master 노드에 접속하세요.','c-dim'); return false; }
+  if(isGpu()){ out(`<span class="c-warn">이미 계산 노드(${S.host})에 있습니다. 먼저 exit 로 master 로 돌아가세요.</span>`); return false; }
+  const opt=parseSlurm(a);
+  if(!opt.part){ out(`<span class="c-err">srun: 파티션(-p)을 지정하세요. 예: -p ${CLUSTERS[S.cluster].partitions[0]}</span>`); return false; }
+  if(!CLUSTERS[S.cluster].partitions.includes(opt.part)){ out(`<span class="c-err">srun: invalid partition specified: ${esc(opt.part)}</span>`);
+    out(`  이 클러스터(${S.cluster})의 파티션: ${CLUSTERS[S.cluster].partitions.join(', ')}`,'c-dim'); return false; }
+  if(/^batch_/.test(opt.part)) out(`<span class="c-warn">참고: srun 에는 보통 debug_* 파티션을 씁니다 (batch_* 는 sbatch용).</span>`);
+  // 노드 결정
+  let node=opt.node;
+  if(node){ if(!CLUSTERS[S.cluster].nodes.find(n=>n.name===node)){ out(`<span class="c-err">srun: invalid node name: ${esc(node)}</span>`); return false; }
+    if(nodeInfo(node).gpus - gpuUsed(node) < opt.gpus){ out(`<span class="c-warn">srun: ${node} 의 가용 GPU가 부족합니다. 다른 노드를 지정하거나 -w 를 빼세요.</span>`); return false; } }
+  else { node=pickNode(opt.gpus); if(!node){ out(`<span class="c-warn">srun: 요청한 GPU를 즉시 배정할 수 있는 노드가 없습니다. 잠시 후 다시 시도하세요.</span>`); return false; } }
+  const job=S.nextJob++;
+  out(`srun: job ${job} queued and waiting for resources`,'c-dim');
+  out(`srun: job ${job} has been allocated resources`,'c-ok');
+  S.alloc={node, gpus:opt.gpus, cpus:opt.cpus*opt.gpus, mem:opt.mem*opt.gpus, part:opt.part, job};
+  S.prevMaster=S.host; S.prevCwd=S.cwd; S.host=node; // cwd 유지 (NAS /data 는 노드 간 공유)
+  const c=condaOf(node); c.active=false; c.inited=false; // 새 노드: base 사라짐, 재init 필요
+  out(`&nbsp;`);
+  out(`<span class="c-dim">─ ${node} 계산 노드에 진입했습니다. 프롬프트에서 (base) 가 사라진 것을 확인하세요.</span>`);
+  out(`<span class="c-dim">  이 노드의 ~/.bashrc 는 NAS 밖(로컬)이라 conda 를 다시 init 해야 합니다:</span>`);
+  out(`<span class="c-dim">  /data/${S.user}/anaconda3/bin/conda init  →  source ~/.bashrc</span>`);
+});
+function parseSlurm(a){ const o={gpus:1,cpus:8,mem:29,part:null,node:null,job:null,name:'run'};
+  a.forEach((tk,i)=>{ let m;
+    if(m=tk.match(/^--gres=gpu:(\d+)/)) o.gpus=+m[1];
+    else if(m=tk.match(/^--cpus-per-gpu=(\d+)/)) o.cpus=+m[1];
+    else if(m=tk.match(/^--mem-per-gpu=(\d+)/)) o.mem=+m[1];
+    else if(tk==='-p'||tk==='--partition') o.part=a[i+1];
+    else if(m=tk.match(/^-p(.+)/)) o.part=m[1];
+    else if(m=tk.match(/^--partition=(.+)/)) o.part=m[1];
+    else if(tk==='-w'||tk==='--nodelist') o.node=a[i+1];
+    else if(m=tk.match(/^-w(.+)/)) o.node=m[1];
+    else if(m=tk.match(/^--nodelist=(.+)/)) o.node=m[1];
+    else if(tk==='-J') o.name=a[i+1];
+  });
+  return o;
+}
+function pickNode(need){ const cl=CLUSTERS[S.cluster]; const cands=cl.nodes.filter(n=>n.type==='gpu'&&(n.gpus-gpuUsed(n.name))>=need);
+  return cands.length?cands[0].name:null; }
+
+/* ----- Slurm: exit ----- */
+def(['exit','logout'],()=>{
+  if(S.host==='local'){ out('이미 로컬입니다.','c-dim'); return; }
+  if(isGpu()){ // 계산 노드 -> master
+    const back=S.prevMaster||CLUSTERS[S.cluster].master;
+    if(S.alloc){ out(`exit`,'c-dim'); out(`srun: job ${S.alloc.job} 자원을 반납했습니다.`,'c-dim'); }
+    S.alloc=null; S.host=back; S.cwd=S.prevCwd||S.env.HOME; ensureMasterConda();
+    return;
+  }
+  if(isMaster()){ out('logout','c-dim'); out(`Connection to ${S.host} closed.`,'c-dim');
+    S.host='local'; S.cwd='/home/'+S.user; return; }
+});
+
+/* ----- Slurm: sbatch ----- */
+def('sbatch',(a)=>{
+  if(!isMaster()){ if(S.host==='local'){ out(`<span class="c-err">sbatch: command not found</span>`); return false; }
+    out(`<span class="c-warn">sbatch 는 보통 master 노드에서 제출합니다.</span>`); }
+  const f=a.filter(x=>x[0]!=='-')[0]; const node=getNode(f);
+  if(!node||node.t!=='file'){ out(`<span class="c-err">sbatch: unable to open file ${esc(f||'')}</span>`); return false; }
+  const dir=parseSBATCH(node.content);
+  if(dir.p && !CLUSTERS[S.cluster].partitions.includes(dir.p)){ out(`<span class="c-err">sbatch: error: invalid partition specified: ${esc(dir.p)}</span>`);
+    out(`  이 클러스터(${S.cluster})의 파티션: ${CLUSTERS[S.cluster].partitions.join(', ')}`,'c-dim'); return false; }
+  if(dir.w && !CLUSTERS[S.cluster].nodes.find(n=>n.name===dir.w)){ out(`<span class="c-err">sbatch: error: invalid node name specified: ${esc(dir.w)}</span>`); return false; }
+  const job=S.nextJob++;
+  // 출력 경로
+  let outpath=(dir.o||('slurm-'+job+'.out')).replace(/%A|%j/g, job);
+  const submitDir=S.cwd;
+  // 노드 결정
+  let jnode=dir.w||pickNode(dir.gpus||1)||CLUSTERS[S.cluster].nodes.find(n=>n.type==='gpu').name;
+  const j={id:job, part:dir.p||'batch', name:dir.J||'batch', user:S.user, st:'PD', node:jnode,
+    gpus:dir.gpus||1, cpus:(dir.cpus||8)*(dir.gpus||1), mem:(dir.mem||29)*(dir.gpus||1),
+    elapsed:'0:00', kind:'batch', script:node.content, outpath, submitDir, done:false};
+  S.jobs.push(j);
+  out(`Submitted batch job ${job}`,'c-ok');
+  // 로그 디렉토리 존재 확인
+  const {dir:od}=parentOf(joinPath(submitDir,outpath));
+  const odNode=getNode(od);
+  setTimeout(()=>{ if(j.cancelled) return; j.st='R'; j.elapsed='0:03'; renderIfActive(); }, 400);
+  setTimeout(()=>{
+    if(j.cancelled) return;
+    j.st='CG'; j.done=true;
+    if(!odNode||odNode.t!=='dir'){
+      out(`<span class="c-warn">[job ${job}] 경고: 로그 디렉토리 '${od}' 가 없어 출력 파일을 만들지 못했습니다. (mkdir logs 필요)</span>`);
+    } else {
+      const content=execScriptForLog(j);
+      writeFileAbs(joinPath(submitDir,outpath), content);
+      out(`<span class="c-dim">[job ${job}] 완료 — 로그: ${outpath} (cat 으로 확인하세요)</span>`);
+    }
+    setTimeout(()=>{ if(j.cancelled) return; const idx=S.jobs.indexOf(j); if(idx>=0) S.jobs.splice(idx,1); renderIfActive(); }, 3000);
+    renderIfActive(); saveProgress();
+  }, 2200);
+});
+function parseSBATCH(src){ const o={gpus:1,cpus:8,mem:29}; src.split('\n').forEach(l=>{ let m;
+  if(m=l.match(/#SBATCH\s+-J\s+(\S+)/)) o.J=m[1];
+  else if(m=l.match(/#SBATCH\s+--gres=gpu:(\d+)/)) o.gpus=+m[1];
+  else if(m=l.match(/#SBATCH\s+--cpus-per-gpu=(\d+)/)) o.cpus=+m[1];
+  else if(m=l.match(/#SBATCH\s+--mem-per-gpu=(\d+)/)) o.mem=+m[1];
+  else if(m=l.match(/#SBATCH\s+-p\s+(\S+)/)) o.p=m[1];
+  else if(m=l.match(/#SBATCH\s+-w\s+(\S+)/)) o.w=m[1];
+  else if(m=l.match(/#SBATCH\s+-t\s+(\S+)/)) o.t=m[1];
+  else if(m=l.match(/#SBATCH\s+-o\s+(\S+)/)) o.o=m[1];
+}); return o; }
+function execScriptForLog(j){
+  const lines=[]; const src=j.script;
+  src.split('\n').forEach(l=>{ l=l.trim();
+    if(l.startsWith('#')||l==='') return;
+    if(l==='pwd') lines.push(j.submitDir);
+    else if(l==='which python'||l==='which python3') lines.push('/data/'+S.user+'/anaconda3/bin/python');
+    else if(l==='hostname') lines.push(j.node);
+    else if(/^python3?\s+(\S+)/.test(l)){ const pn=getNode(joinPath(j.submitDir, RegExp.$1)); if(pn) captureRun(pn.content, lines); else lines.push('python: cannot open '+RegExp.$1); }
+    else if(l.startsWith('echo ')) lines.push(l.slice(5).replace(/^['"]|['"]$/g,''));
+    else if(l==='exit 0'||l==='exit') {}
+  });
+  return lines.join('\n')+'\n';
+}
+function captureRun(src,lines){ src.split('\n').forEach(l=>{ const m=l.match(/^\s*print\((.*)\)\s*$/); if(!m)return; let arg=m[1].trim();
+  if(/^['"].*['"]$/.test(arg)) lines.push(arg.slice(1,-1));
+  else if(/np\.arange\((\d+)\)/.test(arg)){ const k=+RegExp.$1; lines.push('['+Array.from({length:k},(_,i)=>i).join(' ')+']'); }
+  else lines.push(arg); }); }
+function joinPath(base,p){ if(p[0]==='/')return p; return (base.replace(/\/$/,''))+'/'+p; }
+function writeFileAbs(abs,content){ const parts=abs.split('/').filter(Boolean); const base=parts.pop(); let n=S.fs;
+  for(const seg of parts){ if(!n.c[seg])n.c[seg]={t:'dir',c:{}}; n=n.c[seg]; } n.c[base]={t:'file',content}; }
+
+/* ----- Slurm: squeue / scancel / sinfo ----- */
+def('squeue',(a)=>{
+  if(localGuard('squeue')) return false;
+  out('   JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)','c-dim');
+  // 다른 사용자 잡(배경) — 현재 접속한 클러스터에 맞춰 노드/파티션 생성
+  const cl=CLUSTERS[S.cluster]; const gn=cl.nodes.filter(n=>n.type==='gpu');
+  const bpart=cl.partitions.find(p=>p.startsWith('batch'))||cl.partitions[0];
+  const dpart=cl.partitions.find(p=>p.startsWith('debug'))||cl.partitions[0];
+  const pick=(i)=>gn[Math.min(i,gn.length-1)].name;
+  const bg=[
+    {id:184601,part:bpart,name:'diffuse',user:'jiwon',st:'R',time:'8:24:11',node:pick(0)},
+    {id:184610,part:bpart,name:'nerf-tr',user:'minsu',st:'R',time:'2:57:30',node:pick(2)},
+    {id:184615,part:dpart,name:'bash',user:'yuna',st:'R',time:'0:41:02',node:pick(5)},
+  ];
+  const rows=[];
+  if(S.alloc) rows.push({id:S.alloc.job,part:S.alloc.part,name:'bash',user:S.user,st:'R',time:'0:12',node:S.alloc.node,mine:true});
+  S.jobs.forEach(j=> rows.push({id:j.id,part:j.part,name:j.name,user:j.user,st:j.st,time:j.elapsed,node:j.st==='PD'?'(Resources)':j.node,mine:true}));
+  bg.forEach(b=>rows.push(b));
+  rows.sort((x,y)=>x.id-y.id);
+  rows.forEach(r=>{
+    const line=`${String(r.id).padStart(8)} ${r.part.padEnd(9).slice(0,9)} ${String(r.name).padEnd(8).slice(0,8)} ${r.user.padEnd(8).slice(0,8)} ${r.st.padEnd(2)} ${String(r.time).padStart(10)}  ${String((r.st==='PD'?1:1)).padStart(5)} ${r.node}`;
+    out(r.mine?`<span class="c-acc">${esc(line)}</span>`:esc(line));
+  });
+  if(rows.length===0) out('(대기/실행 중인 잡이 없습니다)','c-dim');
+});
+def('scancel',(a)=>{ if(localGuard('scancel')) return false; const id=+a.filter(x=>x[0]!=='-')[0];
+  if(!id){ out('usage: scancel JOBID','c-dim'); return; }
+  const j=S.jobs.find(x=>x.id===id);
+  if(S.alloc&&S.alloc.job===id){ out(`scancel: srun 세션(${id})은 exit 로 종료하세요.`,'c-dim'); return; }
+  if(!j){ out(`<span class="c-warn">scancel: job ${id} 를 찾을 수 없습니다 (내 잡이 아니거나 이미 종료됨).</span>`); return; }
+  j.cancelled=true; const idx=S.jobs.indexOf(j); S.jobs.splice(idx,1);
+  out(`<span class="c-ok">✓ job ${id} 취소됨</span>`);
+});
+def('sinfo',()=>{
+  if(localGuard('sinfo')) return false;
+  const cl=CLUSTERS[S.cluster];
+  out('PARTITION      AVAIL  TIMELIMIT  NODES  STATE  NODELIST','c-dim');
+  const gpu=cl.nodes.filter(n=>n.type==='gpu').map(n=>n.name);
+  cl.partitions.forEach(p=>{ out(`${p.padEnd(14)} up    ${p.startsWith('debug')?'4:00:00':'6-00:00:00'}  ${String(gpu.length).padStart(5)}  idle   ${gpu[0]}...${gpu[gpu.length-1]}`); });
+});
+def(['show-qos'],()=>{
+  if(localGuard('show-qos')) return false;
+  // 실서버 값(seraph/parsers/qos.py 관측): 학부(ugrad)=GPU 1, 대학원(grad)=GPU 4, 둘 다 고성능 0.
+  const rows=[
+    { name:'grad',  tres:'gres/gpu:high_perf=0,gres/gpu=4', jobs:10, submit:20 },
+    { name:'ugrad', tres:'gres/gpu:high_perf=0,gres/gpu=1', jobs:2,  submit:10 },
+  ];
+  const mine=(S.profile&&S.profile.qos)||'ugrad';
+  const fmt=(n,t,j,s)=>`  ${String(n).padEnd(7)}${String(t).padEnd(34)}${String(j).padStart(9)}${String(s).padStart(13)}`;
+  out(esc(fmt('Name','MaxTRESPerUser','MaxJobsPU','MaxSubmitPU')),'c-dim');
+  rows.forEach(r=>{
+    const line=fmt(r.name,r.tres,r.jobs,r.submit);
+    out(r.name===mine?`<span class="c-acc">${esc(line)}</span>`:esc(line));
+  });
+  out('&nbsp;');
+  const m=rows.find(r=>r.name===mine)||rows[1];
+  const gpu=m.tres.match(/gres\/gpu=(\d+)/)[1];
+  out(`내 QOS: <span class="c-acc">${esc(mine)}</span> — GPU <b>${gpu}</b>개까지 · 고성능 노드(k/m/n) <b>불가</b>(high_perf=0) · 동시 실행 ${m.jobs} / 제출 ${m.submit}`,'c-dim');
+  out('세라프 대기의 대부분은 GPU 부족이 아니라 이 QOS 한도 때문입니다.','c-dim');
+});
+def(['show-assoc'],()=>{
+  if(localGuard('show-assoc')) return false;
+  // 실서버 명령: sacctmgr show assoc user=$USER format=User,Account,QOS  (seraph/commands.py)
+  const p=S.profile||{};
+  const account=p.account||'ugrad_ce';
+  const qos=p.qos||'ugrad';
+  const fmt=(u,a,q)=>`  ${String(u).padEnd(12)}${String(a).padEnd(18)}${String(q)}`;
+  out(esc(fmt('User','Account','QOS')),'c-dim');
+  out(esc(fmt(S.user.slice(0,11),account,qos)));
+  out('&nbsp;');
+  out(`계정 <span class="c-acc">${esc(account)}</span> → 파티션 <span class="c-acc">${esc(p.batchPart||'batch_ce_ugrad')}</span>(sbatch) · <span class="c-acc">${esc(p.debugPart||'debug_ce_ugrad')}</span>(srun)`,'c-dim');
+  out('계정(Account)이 학부/대학원·학과·클러스터를 결정합니다. 친구 설정을 그대로 복사하지 마세요.','c-dim');
+});
+
+/* ----- help / man ----- */
+def('help',()=>{
+  out('<span class="c-acc b">Seraph 실습 터미널 — 사용 가능한 명령어</span>');
+  const g=[
+    ['Slurm','srun sbatch scancel squeue sinfo slurm-gres-viz show-qos show-assoc'],
+    ['기본','cd ls cat mkdir rm mv cp touch grep echo head tail wc which find tree pwd'],
+    ['셸','export source env set history clear'],
+    ['모니터','htop nvidia-smi df du free'],
+    ['통신','ssh scp sftp curl wget'],
+    ['에디터','vim nano'],
+    ['환경','conda python bash exit'],
+  ];
+  g.forEach(([k,v])=>out(`  <span class="c-acc">${k.padEnd(7)}</span> ${v}`));
+  out('&nbsp;'); out('우측 "실습 미션"을 따라가며 익혀보세요. `man <명령>` 으로 설명을 볼 수 있습니다.','c-dim');
+});
+const MAN={
+  srun:'인터랙티브/디버그용 잡 실행. GPU 노드를 즉시 할당받아 셸에 진입. 예) srun --gres=gpu:1 --cpus-per-gpu=8 --mem-per-gpu=32G -p {dp} -w {node} --pty $SHELL',
+  sbatch:'배치 잡 제출. #SBATCH 지시문이 담긴 .sh 스크립트를 제출하고 백그라운드로 실행. 예) sbatch hello.sh',
+  squeue:'잡 큐 상태 조회 (JOBID/ST/NODELIST 등).',
+  scancel:'잡 취소. 예) scancel 184620',
+  'slurm-gres-viz':'클러스터의 노드별 GPU 점유 현황 표시. -i 는 인터랙티브(스냅샷). 정렬은 --sort=free|used|name|total (기본 node), -r 로 역순. 예) slurm-gres-viz --sort=free — 지금 여유 GPU 가 많은 노드부터 보여줘 -w 로 지정할 노드를 고르기 좋다.',
+  'show-qos':'QOS별 자원 한도(MaxJobsPU 등) 확인.',
+  'show-assoc':'내 계정이 속한 account/partition/QOS 확인.',
+  ssh:'원격 접속. 예) ssh {user}@{master} · ssh {node} nvidia-smi · ssh {node} -t htop',
+  conda:'아나콘다 환경 관리. conda init / conda activate / conda env list',
+  'nvidia-smi':'GPU 상태/사용량 조회 (계산 노드에서).',
+  ls:'디렉토리 내용 나열. -l 상세, -a 숨김 포함.',
+  vim:'텍스트 에디터. 시뮬레이터에서는 모달 편집기로 열립니다.',
+};
+def('man',(a)=>{ const c=a[0]; if(MAN[c]){ out(`<span class="c-acc b">${esc(c)}</span>`); out('  '+esc(tpl(MAN[c]))); }
+  else out(`man: ${esc(c||'')}: 설명이 없습니다. help 를 참고하세요.`,'c-dim'); });
+
+/* ----- 초기 conda(master) ----- */
+function ensureMasterConda(){ const c=condaOf(S.host); if(isMaster()&&!c.everSet){ c.inited=true; c.active=true; c.env='private'; c.everSet=true; } }
+
+/* ============================ 부팅/연결 ============================ */
+function bootConnect(masterHost){
+  out(`ssh: connecting to ${masterHost} ...`,'c-dim');
+  const seq=[
+    `The authenticity of host '${masterHost}' can't be established.`,
+    `Warning: Permanently added '${masterHost}' to the list of known hosts.`,
+    `${S.user}@${masterHost}'s password: ********`,
+  ];
+  seq.forEach(l=>out(l,'c-dim'));
+  out('&nbsp;');
+  out(`<span class="c-acc">  ╔══════════════════════════════════════════════╗</span>`);
+  out(`<span class="c-acc">  ║   Welcome to SERAPH — ${CLUSTERS[S.cluster].label} cluster        ║</span>`);
+  out(`<span class="c-acc">  ║   KHU Vision & AI Lab · GPU Computing         ║</span>`);
+  out(`<span class="c-acc">  ╚══════════════════════════════════════════════╝</span>`);
+  out(`Last login: Sun Jul 20 09:12:44 2025 from 163.180.160.2`,'c-dim');
+  out('&nbsp;');
+  S.host=masterHost; S.cwd=S.env.HOME; ensureMasterConda();
+  out(`이곳은 <b class="c-node">master 노드</b> 입니다 — 접속의 관문이자 CPU 노드입니다.`,'c-dim');
+  out(`무거운 연산은 금지! <span class="c-acc">srun</span>/<span class="c-acc">sbatch</span> 로 GPU 노드를 확보하세요.`,'c-dim');
+}
+
+/* ============================ 입력 처리 ============================ */
+function submitLine(){
+  if(!S) return; // 로그인 전에는 입력 무시
+  const raw=cmdEl.value; cmdEl.value='';
+  // 절대경로 conda 호출 선처리
+  handlePreExec(raw);
+  renderPrompt();
+}
+function handlePreExec(raw){
+  runLineWrapped(raw);
+}
+function runLineWrapped(raw){
+  // execOne 대체: 절대경로 conda 감지
+  echoAndRun(raw);
+}
+function echoAndRun(raw){
+  raw=raw.replace(/\s+$/,'');
+  echoCommand(raw);
+  if(raw.trim()!==''){ S.history.push(raw); S.histIdx=S.history.length; }
+  const segs=raw.split(/&&|;/).map(s=>s.trim()).filter(Boolean);
+  segs.forEach(seg=>execSegment(seg));
+  afterCommand(raw);
+}
+function execSegment(seg){
+  const parsed=parseSegment(seg);
+  const tokens=parsed.tokens.map(expandVars);
+  const redir=parsed.redir;
+  if(tokens.length===0) return;
+  const name=tokens[0];
+  const argv=tokens.slice(1).flatMap(expandGlob);
+  // 절대경로 conda
+  if(/\/conda$/.test(name)){ handleConda(argv, name); S.cmdLog.push({name:'conda',argv,raw:seg,ok:true}); return; }
+  // 절대경로 python
+  if(/\/(python3?|pip)$/.test(name)){ const base=name.split('/').pop(); if(COMMANDS[base]) COMMANDS[base](argv,{raw:seg,name:base}); S.cmdLog.push({name:base,argv,raw:seg,ok:true}); return; }
+  const cmd=COMMANDS[name];
+  if(redir) CAP=[];
+  const emit = CAP ? (t)=>CAP.push(String(t)) : null;
+  let ok=true;
+  if(!cmd){ out(`<span class="c-err">${esc(name)}: command not found</span>`); ok=false; }
+  else{ try{ ok=cmd(argv,{raw:seg,emit,name})!==false; }catch(e){ CAP=null; out(`<span class="c-err">seraph: 오류: ${esc(e.message)}</span>`); ok=false; } }
+  if(redir){ const data=(CAP||[]).join('\n'); CAP=null; if(ok) writeRedirect(redir.file,data,redir.append); }
+  S.cmdLog.push({name,argv,raw:seg,ok});
+}
+
+cmdEl.addEventListener('keydown',e=>{
+  if(!S){ return; }
+  if(e.key==='Enter'){ e.preventDefault(); submitLine(); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); if(S.histIdx>0){ S.histIdx--; cmdEl.value=S.history[S.histIdx]||''; moveCaretEnd(); } }
+  else if(e.key==='ArrowDown'){ e.preventDefault(); if(S.histIdx<S.history.length-1){ S.histIdx++; cmdEl.value=S.history[S.histIdx]||''; } else { S.histIdx=S.history.length; cmdEl.value=''; } moveCaretEnd(); }
+  else if(e.key==='Tab'){ e.preventDefault(); tabComplete(); }
+  else if(e.ctrlKey&&(e.key==='l'||e.key==='L')){ e.preventDefault(); screenEl.innerHTML=''; }
+  else if(e.ctrlKey&&(e.key==='c'||e.key==='C')){ if(!window.getSelection().toString()){ e.preventDefault(); echoCommand(cmdEl.value+'^C'); cmdEl.value=''; } }
+});
+function moveCaretEnd(){ requestAnimationFrame(()=>{ cmdEl.selectionStart=cmdEl.selectionEnd=cmdEl.value.length; }); }
+function tabComplete(){
+  const val=cmdEl.value; const parts=val.split(' '); const frag=parts[parts.length-1];
+  let pool=[];
+  if(parts.length===1){ pool=Object.keys(COMMANDS); }
+  else { const dir=frag.includes('/')?frag.slice(0,frag.lastIndexOf('/')+1):''; const base=frag.slice(dir.length);
+    const dn=getNode(dir||'.'); if(dn&&dn.t==='dir') pool=Object.keys(dn.c).map(n=> dir+n); else pool=[];
+    const matches=pool.filter(p=>p.startsWith(frag)); if(matches.length===1){ parts[parts.length-1]=matches[0]+(getNode(matches[0])&&getNode(matches[0]).t==='dir'?'/':''); cmdEl.value=parts.join(' '); return; }
+    if(matches.length>1){ out(matches.map(m=>m.split('/').pop()).join('  '),'c-dim'); } return; }
+  const matches=pool.filter(p=>p.startsWith(frag));
+  if(matches.length===1){ parts[parts.length-1]=matches[0]; cmdEl.value=parts.join(' ')+' '; }
+  else if(matches.length>1){ out(matches.join('  '),'c-dim'); }
+}
+screenEl.addEventListener('click',()=>{ if(!window.getSelection().toString()) cmdEl.focus(); });
+document.querySelector('.inputline').addEventListener('click',()=>cmdEl.focus());
+
+/* ============================ 에디터 모달 ============================ */
+let editorTarget=null;
+function openEditor(file){
+  editorTarget=resolve(file);
+  const existing=getNode(file);
+  $('edName').textContent=file.split('/').pop();
+  $('edArea').value=existing&&existing.t==='file'?existing.content:'';
+  $('overlay').classList.add('show');
+  setTimeout(()=>$('edArea').focus(),50);
+}
+function sampleFor(name){
+  if(/\.py$/.test(name)) return `import numpy as np\nprint('hello')\nprint(np.arange(10))\n`;
+  if(/\.sh$/.test(name)){ const p=S.profile||{}; const bp=p.batchPart||'batch_ce_ugrad'; const node=p.node||'ariel-v7';
+    return `#!/usr/bin/bash\n#SBATCH -J test-run\n#SBATCH --gres=gpu:1\n#SBATCH --cpus-per-gpu=8\n#SBATCH --mem-per-gpu=32G\n#SBATCH -p ${bp}\n#SBATCH -w ${node}\n#SBATCH -t 1-0\n#SBATCH -o logs/slurm-%A.out\n\npwd\nwhich python\nhostname\npython hello.py\nexit 0\n`; }
+  return '';
+}
+function closeEditor(save){
+  if(save){ const {dir,base}=parentOf(editorTarget); const dn=getNode(dir);
+    if(!dn||dn.t!=='dir'){ toast('저장 실패: 상위 디렉토리가 없습니다'); }
+    else { dn.c[base]={t:'file',content:$('edArea').value}; toast('저장됨: '+base+' (:wq)'); } }
+  $('overlay').classList.remove('show'); editorTarget=null;
+  renderPrompt(); evaluateLessons(); cmdEl.focus();
+}
+$('edSave').onclick=()=>closeEditor(true);
+$('edCancel').onclick=()=>closeEditor(false);
+$('edSample').onclick=()=>{ $('edArea').value=sampleFor($('edName').textContent); $('edArea').focus(); };
+$('edArea').addEventListener('keydown',e=>{
+  if(e.ctrlKey&&(e.key==='s'||e.key==='S')){ e.preventDefault(); closeEditor(true); }
+  else if(e.key==='Escape'){ e.preventDefault(); closeEditor(false); }
+  else if(e.key==='Tab'){ e.preventDefault(); const t=e.target; const s=t.selectionStart; t.value=t.value.slice(0,s)+'\t'+t.value.slice(t.selectionEnd); t.selectionStart=t.selectionEnd=s+1; }
+});
+
+/* ============================ 미션(레슨) ============================ */
+const LESSONS=[
+  { eyebrow:'STEP 01 · 오리엔테이션', title:'지금 나는 어디에 있나?',
+    desc:'실습은 <b>내 PC(local)</b>에서 시작합니다. Seraph는 원격 클러스터예요. 먼저 내 위치와 계정을 확인해봅시다.',
+    steps:[
+      {t:'<code>whoami</code> 로 내 계정 이름 확인', a:'whoami', hint:'그냥 <code>whoami</code> 를 입력하고 Enter.', check:c=>c.ran('whoami')},
+      {t:'<code>hostname</code> 으로 지금 컴퓨터 이름 확인', a:'hostname', hint:'<code>hostname</code> 입력. 지금은 my-pc(로컬)입니다.', check:c=>c.ran('hostname')},
+      {t:'로컬임을 확인했다면 다음 단계로 (Seraph 접속 준비)', a:null, hint:'다음 미션에서 ssh 로 접속합니다.', check:c=>c.ran('whoami')&&c.ran('hostname')},
+    ]},
+  { eyebrow:'STEP 02 · 접속', title:'ssh 로 Seraph master 노드 접속',
+    desc:"‘접속’이란 <b>ssh 로그인</b>을 의미합니다. 관문인 <b>master 노드</b>에 먼저 들어갑니다. (학교망 포트 22 / 외부 30080)",
+    steps:[
+      {t:'<code>ssh {user}@{master}</code> 로 접속', a:'ssh {user}@{master}', hint:'<code>ssh {user}@{master}</code> 를 입력하세요. 좌측 명령어 사전의 칩을 눌러도 됩니다.', check:c=>c.state.host.endsWith('-master')},
+      {t:'접속 후 프롬프트가 <code>{user}@{master}</code> 로 바뀐 것을 확인', a:'pwd', hint:'<code>pwd</code> 로 현재 경로를 확인해보세요.', check:c=>c.state.host.endsWith('-master')&&c.ranAny(['pwd','ls'])},
+    ]},
+  { eyebrow:'STEP 03 · 파일시스템', title:'NAS(/data) 이해하고 내 작업공간 만들기',
+    desc:'코드·환경은 <b>NAS의 /data/$USER</b>에 저장합니다. <code>/home</code>은 최소한만 쓰고 큰 파일을 두지 않아요.',
+    steps:[
+      {t:'<code>cd /data/$USER</code> 로 내 NAS 디렉토리 이동', a:'cd /data/$USER', hint:'<code>cd /data/$USER</code> — $USER 는 자동으로 계정명으로 바뀝니다.', check:c=>c.state.cwd==='/data/'+c.state.user},
+      {t:'<code>ls</code> 로 내용 확인', a:'ls', hint:'<code>ls</code> 또는 <code>ls -al</code>.', check:c=>c.ran('ls')&&c.state.cwd.startsWith('/data/')},
+      {t:'<code>mkdir myproject</code> 로 새 폴더 생성 후 <code>ls</code>', a:'mkdir myproject', hint:'<code>mkdir myproject</code> 입력 후 <code>ls</code> 로 확인.', check:c=>c.exists('/data/'+c.state.user+'/myproject')},
+    ]},
+  { eyebrow:'STEP 04 · 리눅스 기본기', title:'필수 Linux 명령어 손에 익히기',
+    desc:'파일을 만들고, 보고, 찾는 기본 명령을 연습합니다. <code>echo &gt; 파일</code>, <code>cat</code>, <code>tree</code>, <code>grep</code>, <code>which</code>.',
+    steps:[
+      {t:'<code>echo "hello seraph" &gt; note.txt</code> 로 파일 생성', a:'echo "hello seraph" > note.txt', hint:'리다이렉트 <code>&gt;</code> 로 출력 내용을 파일에 저장합니다.', check:c=>c.existsIn('note.txt')},
+      {t:'<code>cat note.txt</code> 로 내용 확인', a:'cat note.txt', hint:'<code>cat note.txt</code>', check:c=>c.ran('cat')},
+      {t:'<code>tree</code> 로 디렉토리 구조 보기', a:'tree', hint:'<code>tree</code> 또는 <code>ls -R</code>.', check:c=>c.ran('tree')},
+      {t:'<code>which python</code> 으로 파이썬 경로 확인', a:'which python', hint:'현재 어떤 python 이 잡히는지 확인합니다.', check:c=>c.ran('which')},
+    ]},
+  { eyebrow:'STEP 05 · GPU 현황', title:'GPU 자원 현황 확인하기',
+    desc:'요청 전에 <b>어느 노드에 GPU가 비었는지</b> 먼저 봅니다. <code>slurm-gres-viz -i</code> 와 <code>squeue</code>.',
+    steps:[
+      {t:'<code>slurm-gres-viz -i</code> 로 노드별 GPU 점유 확인', a:'slurm-gres-viz -i', hint:'<code>slurm-gres-viz -i</code> — ▓ 사용중, ░ 여유.', check:c=>c.ran('slurm-gres-viz')},
+      {t:'<code>squeue</code> 로 현재 잡 큐 확인', a:'squeue', hint:'<code>squeue</code> — 누가 무슨 잡을 돌리는지 보입니다.', check:c=>c.ran('squeue')},
+    ]},
+  { eyebrow:'STEP 06 · srun', title:'srun 으로 인터랙티브 GPU 할당',
+    desc:'디버그/테스트는 <b>srun</b> 으로 GPU 노드에 직접 들어갑니다. 새 노드에선 <code>(base)</code> 가 사라지니 conda 를 다시 init 해야 해요.',
+    steps:[
+      {t:'srun 한 줄로 GPU 1개 할당받기 (파티션 <code>{dp}</code>, 노드 <code>{node}</code>)', a:'srun --gres=gpu:1 --cpus-per-gpu=8 --mem-per-gpu=32G -p {dp} -w {node} --pty $SHELL', hint:'긴 명령은 사전 칩/정답 보기를 활용하세요. -p 는 내 학과의 debug 파티션({dp}).', check:c=>c.isGpu()},
+      {t:'계산 노드에서 <code>/data/$USER/anaconda3/bin/conda init</code>', a:'/data/$USER/anaconda3/bin/conda init', hint:'새 노드의 ~/.bashrc 에 conda 설정을 추가합니다.', check:c=>c.state.conda[c.state.host]&&c.state.conda[c.state.host].inited},
+      {t:'<code>source ~/.bashrc</code> 로 적용 → (base) 다시 등장', a:'source ~/.bashrc', hint:'적용하면 프롬프트에 (base) 가 다시 붙습니다.', check:c=>c.state.conda[c.state.host]&&c.state.conda[c.state.host].active},
+      {t:'<code>nvidia-smi</code> 로 할당된 GPU 확인', a:'nvidia-smi', hint:'계산 노드에서만 GPU가 보입니다.', check:c=>c.ran('nvidia-smi')&&c.isGpu()},
+      {t:'<code>exit</code> 로 master 로 복귀 (자원 반납)', a:'exit', hint:'<code>exit</code> — srun 세션을 끝냅니다.', check:c=>c.state.host.endsWith('-master')&&c.didAll(['srun','nvidia-smi'])},
+    ]},
+  { eyebrow:'STEP 07 · sbatch', title:'sbatch 로 배치 잡 제출하기',
+    desc:'실제 학습은 <b>sbatch</b> 로 스크립트를 제출해 백그라운드 실행합니다. 로그 디렉토리를 먼저 만드는 걸 잊지 마세요.',
+    steps:[
+      {t:'master 에서 <code>cd /data/$USER</code> 후 <code>mkdir logs</code>', a:'cd /data/$USER && mkdir logs', hint:'sbatch 의 -o 경로(logs/)가 미리 있어야 로그가 생깁니다. 먼저 cwd 를 /data/$USER 로 옮긴 뒤 mkdir logs.', check:c=>c.exists('/data/'+c.state.user+'/logs')},
+      {t:'<code>vim hello.py</code> — 파이썬 파일 작성 (에디터의 "예시 코드 삽입" 사용 가능)', a:'vim hello.py', hint:'에디터가 열리면 예시 코드를 넣고 :wq(저장).', check:c=>c.existsAny(['/data/'+c.state.user+'/hello.py'])},
+      {t:'<code>vim hello.sh</code> — #SBATCH 지시문 스크립트 작성', a:'vim hello.sh', hint:'에디터의 "예시 코드 삽입"으로 #SBATCH 템플릿을 넣으세요.', check:c=>c.existsAny(['/data/'+c.state.user+'/hello.sh'])},
+      {t:'<code>sbatch hello.sh</code> 로 제출', a:'sbatch hello.sh', hint:'제출하면 "Submitted batch job N" 이 뜹니다.', check:c=>c.ran('sbatch')},
+      {t:'<code>squeue</code> 로 내 잡 확인 → 잠시 뒤 <code>cat logs/slurm-*.out</code>', a:'squeue', hint:'잡이 끝나면 logs/ 에 로그 파일이 생깁니다. cat 으로 여세요.', check:c=>c.ran('sbatch')&&c.ranAny(['squeue','cat'])},
+    ]},
+  { eyebrow:'STEP 08 · 예절', title:"NAS 예절 & Dos/Don'ts",
+    desc:'모델이 NAS(/data)의 데이터셋에 직접 접근하면 서버에 부담을 줍니다. <b>계산 노드에서</b> tar 를 <b>/local_datasets/</b> 로 풀어서 학습하세요.',
+    steps:[
+      {t:'먼저 <code>srun ... --pty $SHELL</code> 으로 GPU 계산 노드 확보', a:'srun --gres=gpu:1 --cpus-per-gpu=8 --mem-per-gpu=32G -p {dp} -w {node} --pty $SHELL', hint:'예절 실습은 반드시 계산 노드에서 합니다. 이미 노드에 있다면 이 단계는 자동 통과됩니다.', check:c=>c.isGpu()},
+      {t:'계산 노드에서 <code>cp /data/datasets/tarfiles/ImageNet.tar ./</code>', a:'cp /data/datasets/tarfiles/ImageNet.tar ./', hint:'NAS 의 tar 파일 하나만 계산 노드로 복사합니다.', check:c=>c.isGpu()&&c.existsIn('ImageNet.tar')},
+      {t:'<code>tar -xvf ImageNet.tar -C /local_datasets/</code> 로 로컬 디스크에 추출', a:'tar -xvf ImageNet.tar -C /local_datasets/', hint:'-C 로 추출 위치를 계산 노드 로컬(/local_datasets/)로 지정합니다.', check:c=>c.isGpu()&&c.exists('/local_datasets/ImageNet')},
+      {t:'완료! 이제 dataloader 경로를 <code>/local_datasets/</code> 로 두면 됩니다.', a:null, hint:'축하합니다 — 모든 미션을 마쳤습니다!', check:c=>c.exists('/local_datasets/ImageNet')},
+    ]},
+];
+
+/* 미션 평가 컨텍스트 */
+function lessonCtx(){
+  const names=S.cmdLog.map(x=>x.name);
+  return {
+    state:S,
+    ran:(n)=>S.cmdLog.some(x=>x.name===n),
+    ranAny:(arr)=>arr.some(n=>S.cmdLog.some(x=>x.name===n)),
+    didAll:(arr)=>arr.every(n=>S.cmdLog.some(x=>x.name===n)),
+    isGpu:()=>isGpu(),
+    exists:(p)=>!!getNode(p),
+    existsIn:(base)=>{ const n=getNode(joinPath(S.cwd,base)); return !!n; },
+    existsAny:(arr)=>arr.some(p=>!!getNode(p)),
+  };
+}
+function evaluateLessons(){
+  const L=LESSONS[S.lesson]; if(!L) return;
+  const ctx=lessonCtx();
+  let advanced=false;
+  while(S.step<L.steps.length){
+    let stepDone=true;
+    try{ stepDone=L.steps[S.step].check(ctx); }catch(e){ stepDone=false; }
+    if(stepDone){ S.step++; advanced=true; } else break;
+  }
+  if(advanced){ renderMission(); if(S.step>=L.steps.length){ completeLesson(); } }
+}
+function completeLesson(){
+  if(S.completed[S.lesson]) return;
+  S.completed[S.lesson]=true;
+  const last=S.lesson===LESSONS.length-1;
+  toast(last?'🎉 모든 미션 완료! 훌륭합니다.':'✓ 미션 '+(S.lesson+1)+' 완료!');
+  if(!last){ setTimeout(()=>{ if(S.lesson<LESSONS.length-1 && S.completed[S.lesson]){ /* 자동 이동은 안 함 */ } },10); }
+  renderMission();
+}
+
+/* ============================ 렌더링: 미션 패널 ============================ */
+function renderMission(){
+  const L=LESSONS[S.lesson];
+  $('lessonNo').textContent=`${S.lesson+1} / ${LESSONS.length}`;
+  const totalSteps=LESSONS.reduce((a,l)=>a+l.steps.length,0);
+  const doneSteps=LESSONS.reduce((a,l,i)=> a + (S.completed[i]?l.steps.length : i===S.lesson?S.step : 0),0);
+  $('progBar').style.width=Math.round(doneSteps/totalSteps*100)+'%';
+  const allDone=S.completed[S.lesson]&&S.lesson===LESSONS.length-1&&Object.keys(S.completed).length>=LESSONS.length;
+  let html=`<div class="m-eyebrow">${L.eyebrow}</div><h3 class="m-title">${L.title}</h3><p class="m-desc">${tpl(L.desc)}</p>`;
+  html+='<ol class="steps">';
+  L.steps.forEach((st,i)=>{
+    const done=i<S.step; const active=i===S.step;
+    html+=`<li class="${done?'done':''}${active?' active':''}">
+      <span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6 9 17l-5-5"/></svg></span>
+      <span class="tx">${tpl(st.t)}</span></li>`;
+  });
+  html+='</ol>';
+  // 액션(현재 스텝 힌트/정답)
+  const cur=L.steps[S.step];
+  html+=`<div class="m-actions">`;
+  if(cur){
+    html+=`<button class="btn ghost" id="btnHint">힌트</button>`;
+    if(cur.a) html+=`<button class="btn" id="btnAnswer">정답 입력</button>`;
+  } else if(S.lesson<LESSONS.length-1){
+    html+=`<button class="btn primary" id="btnNextDone">다음 미션 ▶</button>`;
+  } else {
+    html+=`<div class="alldone"><div class="big">🎉 전체 실습 완료!</div><div class="m-desc" style="margin:0">이제 실제 Seraph에서도 자신 있게 명령어를 쓸 수 있어요. 자유롭게 더 연습해보세요.</div></div>`;
+  }
+  html+=`</div>`;
+  html+=`<div class="hintbox" id="hintbox"></div>`;
+  $('missionBody').innerHTML=html;
+  $('lessonPick').textContent='';
+  // 버튼 바인딩
+  const bh=$('btnHint'); if(bh) bh.onclick=()=>{ const hb=$('hintbox'); hb.innerHTML='<b>힌트</b> · '+tpl(cur.hint||''); hb.classList.toggle('show'); };
+  const ba=$('btnAnswer'); if(ba) ba.onclick=()=>{ cmdEl.value=tpl(cur.a); cmdEl.focus(); moveCaretEnd(); toast('정답을 입력했습니다 — Enter 를 누르세요'); };
+  const bn=$('btnNextDone'); if(bn) bn.onclick=()=>gotoLesson(S.lesson+1);
+  $('prevLesson').disabled=S.lesson===0;
+  $('nextLesson').disabled=S.lesson===LESSONS.length-1;
+}
+function gotoLesson(i){ if(i<0||i>=LESSONS.length) return; S.lesson=i;
+  // 이미 완료한 레슨이면 스텝을 끝으로, 아니면 현재까지 달성분 재평가
+  S.step=0; renderMission(); evaluateLessons(); saveProgress(); cmdEl.focus(); }
+$('prevLesson').onclick=()=>gotoLesson(S.lesson-1);
+$('nextLesson').onclick=()=>gotoLesson(S.lesson+1);
+
+/* ============================ 명령어 사전 ============================ */
+function renderRef(){
+  const groups=[
+    ['Slurm', ['slurm-gres-viz -i','slurm-gres-viz --sort=free','srun --gres=gpu:1 --cpus-per-gpu=8 --mem-per-gpu=32G -p {dp} -w {node} --pty $SHELL','sbatch hello.sh','squeue','scancel','show-qos','show-assoc','sinfo']],
+    ['접속·이동', ['ssh {user}@{master}','exit','cd /data/$USER','pwd','ls -al']],
+    ['파일', ['cat','mkdir logs','tree','grep','head','tail','cp','mv','rm','which python','find']],
+    ['환경', ['conda init','conda activate','source ~/.bashrc','nvidia-smi','htop','vim hello.py']],
+  ];
+  let html='';
+  groups.forEach(([g,cmds])=>{ html+=`<div class="ref-group"><h3>${g}</h3><div class="chips">`;
+    cmds.forEach(raw=>{ const c=tpl(raw); html+=`<span class="chip" data-cmd="${esc(c)}">${esc(c.length>34?c.slice(0,32)+'…':c)}</span>`; });
+    html+='</div></div>'; });
+  $('refBody').innerHTML=html;
+  $('refBody').querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{ cmdEl.value=ch.dataset.cmd; cmdEl.focus(); moveCaretEnd(); });
+}
+
+/* ============================ 저장(진행상태/테마) ============================ */
+// 진행상태는 '완료 여부'만 저장. 환경(host/cwd/fs)은 새로고침 시 초기화되므로
+// 항상 로컬(lesson 0)에서 시작하고, 완료한 미션은 체크/진행바에 반영한다.
+function saveProgress(){ try{ localStorage.setItem('seraph_prog', JSON.stringify({completed:S.completed})); }catch(e){} }
+function loadProgress(){ try{ const p=JSON.parse(localStorage.getItem('seraph_prog')||'{}'); if(p&&p.completed&&typeof p.completed==='object') S.completed=p.completed; }catch(e){} }
+
+/* ============================ 테마 ============================ */
+function applyTheme(t){ if(t) document.documentElement.setAttribute('data-theme',t); else document.documentElement.removeAttribute('data-theme');
+  const eff = t || (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  $('themeLbl').textContent = eff==='dark'?'라이트':'다크';
+}
+$('btnTheme').onclick=()=>{ const cur=document.documentElement.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  const next=cur==='dark'?'light':'dark'; applyTheme(next); try{localStorage.setItem('seraph_theme',next)}catch(e){} };
+
+/* ============================ 토스트 ============================ */
+let toastTimer=null;
+function toast(msg){ $('toastMsg').textContent=msg; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600); }
+
+/* ============================ 로그인 / 배정 ============================ */
+function saveProfileLS(email,major,position){ try{ localStorage.setItem('seraph_profile', JSON.stringify({email,major,position})); }catch(e){} }
+function loadProfileLS(){ try{ const p=JSON.parse(localStorage.getItem('seraph_profile')||'null'); if(p&&p.email&&p.major) return p; }catch(e){} return null; }
+
+function renderProfileBadge(){
+  const b=$('profileBadge'); const p=S&&S.profile;
+  if(!p){ b.style.display='none'; return; }
+  b.style.display='inline-flex';
+  b.innerHTML=`${esc(S.user)} · <b>${esc(p.deptShort)}</b> · <span class="dotc">${esc(p.cluster)}</span>`;
+}
+
+function showLogin(){
+  const sel=$('liMajor');
+  // 배정 클러스터는 신분(학부/대학원)에 따라 달라지므로 옵션에 고정 표기하지 않는다(아래 미리보기에서 동적으로 안내).
+  sel.innerHTML=Object.keys(DEPTS).map(k=>`<option value="${k}">${esc(DEPTS[k].label)} (${DEPTS[k].short})</option>`).join('');
+  // 저장된 값 복원
+  const saved=loadProfileLS();
+  const email=$('liEmail'); email.value=saved?saved.email:'';
+  if(saved){ sel.value=saved.major; }
+  let pos=(saved&&saved.position)||'ugrad';
+  $('liPos').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.pos===pos));
+  const err=$('liErr');
+  const preview=()=>{
+    const prof=profileFor(sel.value,pos);
+    $('liPreview').innerHTML=`배정 → <b>${esc(prof.cluster)}</b> 클러스터 · 접속 <span class="n">ssh ${esc(usernameFromEmail(email.value))}@${esc(prof.master)}</span><br>파티션 <b>${esc(prof.debugPart)}</b>(srun) / <b>${esc(prof.batchPart)}</b>(sbatch)`;
+  };
+  const validEmail=()=>/@khu\.ac\.kr\s*$/i.test(email.value.trim());
+  const refresh=()=>{ preview(); const ok=validEmail(); email.classList.toggle('bad',email.value.length>0&&!ok);
+    err.classList.toggle('show', email.value.length>0&&!ok); if(email.value.length>0&&!ok) err.textContent='경희대 이메일(@khu.ac.kr)을 입력하세요.'; };
+  email.oninput=refresh; sel.onchange=preview;
+  $('liPos').querySelectorAll('button').forEach(btn=>btn.onclick=()=>{ pos=btn.dataset.pos;
+    $('liPos').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===btn)); preview(); });
+  const submit=()=>{ if(!validEmail()){ email.classList.add('bad'); err.textContent='경희대 이메일(@khu.ac.kr)을 입력하세요.'; err.classList.add('show'); email.focus(); return; }
+    const e=email.value.trim(), m=sel.value; saveProfileLS(e,m,pos); $('loginOverlay').classList.remove('show'); startSession(e,m,pos); };
+  $('liStart').onclick=submit;
+  email.onkeydown=(ev)=>{ if(ev.key==='Enter'){ ev.preventDefault(); submit(); } };
+  preview(); refresh();
+  $('loginOverlay').classList.add('show');
+  setTimeout(()=>email.focus(),60);
+}
+
+/* ============================ 세션 시작 / 부팅 ============================ */
+function startSession(email, major, position){
+  const prof=profileFor(major, position);
+  USER=usernameFromEmail(email);
+  S=freshState();
+  S.email=email; S.profile=prof; S.cluster=prof.cluster;
+  installPrivateConda();
+  loadProgress();
+  renderProfileBadge();
+  screenEl.innerHTML='';
+  renderTopo(); renderRef();
+  bootScreen();
+  renderPrompt();
+  renderMission();
+  evaluateLessons();
+  setTimeout(()=>cmdEl.focus(),80);
+}
+
+function bootScreen(){
+  const p=S.profile||{};
+  out('<span class="c-acc b">SERAPH 실습 터미널</span> — 브라우저 안의 Slurm/Linux 트레이너','');
+  out('경희대 Vision·AI Lab Seraph 튜토리얼 기반 · 실제 서버가 아닌 시뮬레이터입니다.','c-dim');
+  out('&nbsp;');
+  out(`계정 <span class="c-ok">${esc(S.user)}</span>  ·  ${esc(S.email||'')}`,'c-dim');
+  out(`배정 <span class="c-acc">${esc(p.deptLabel||'')}</span> → <b class="c-node">${esc(p.cluster||'')}</b> 클러스터  ·  파티션 <span class="c-acc">${esc(p.debugPart||'')}</span> / <span class="c-acc">${esc(p.batchPart||'')}</span>`);
+  out('&nbsp;');
+  out(`지금은 <b class="c-node">내 PC(local)</b> 입니다. 우측 <span class="c-acc">실습 미션</span>을 따라가며 진행하세요.`,'');
+  out(`도움말: <span class="c-acc">help</span> · 명령 설명: <span class="c-acc">man &lt;명령&gt;</span> · 자동완성: <span class="c-acc">Tab</span> · 히스토리: <span class="c-acc">↑/↓</span>`,'c-dim');
+  out('&nbsp;');
+  out(`첫 미션: <span class="c-acc">whoami</span> 확인 후 <span class="c-acc">ssh ${esc(S.user)}@${esc(p.master||'')}</span> 로 접속하세요.`,'c-warn');
+  out('&nbsp;');
+}
+
+$('btnReset').onclick=()=>{ if(confirm('실습 환경·진행 상태·배정을 모두 초기화할까요?')){ try{localStorage.removeItem('seraph_prog');localStorage.removeItem('seraph_profile');}catch(e){} location.reload(); } };
+$('profileBadge').onclick=()=>{ showLogin(); };
+
+function init(){
+  const savedTheme=(()=>{try{return localStorage.getItem('seraph_theme')}catch(e){return null}})();
+  applyTheme(savedTheme);
+  const sp=loadProfileLS();
+  if(sp){ startSession(sp.email, sp.major, sp.position||'ugrad'); }
+  else { showLogin(); }
+}
+init();
+</script>

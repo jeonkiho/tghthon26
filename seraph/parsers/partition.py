@@ -75,10 +75,16 @@ def parse_partitions(text):
             node_count = int(nodes)
         except ValueError:
             node_count = 0
-        out[name] = Partition(
-            name=name,
-            time_limit_seconds=parse_slurm_duration(limit),
-            node_count=node_count,
-            is_default=is_default,
-        )
+        # sinfo 는 (파티션 × 노드상태)별로 한 줄씩 준다. 같은 파티션이 여러 줄이면
+        # 노드 수를 합치고 기본(*) 표시를 OR 한다.
+        if name in out:
+            out[name].node_count += node_count
+            out[name].is_default = out[name].is_default or is_default
+        else:
+            out[name] = Partition(
+                name=name,
+                time_limit_seconds=parse_slurm_duration(limit),
+                node_count=node_count,
+                is_default=is_default,
+            )
     return out

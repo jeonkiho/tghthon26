@@ -1,0 +1,341 @@
+"""127.0.0.1에서만 실행하는 SERAPH GUI FastAPI 앱."""
+
+from __future__ import annotations
+
+import logging
+import pathlib
+from contextlib import asynccontextmanager
+from typing import Annotated, Any
+
+from anyio import to_thread
+from fastapi import FastAPI, Path, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from seraph import config as config_module
+from seraph import clusters, history, placement, sbatch, services, slack, tutorial
+
+from .cache import SnapshotCache
+from .dependencies import ConnectionManager
+from .errors import ApiError, install_error_handlers
+from .job_service import JobService
+from .local_picker import select_code_path
+from .occupancy_history import OccupancyHistory
+from .schemas import (
+    ConnectRequest,
+    JobSpec,
+    PreviewRequest,
+    RecommendationRequest,
+    SubmitRequest,
+)
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+LOCAL_JOB_ID = Annotated[str, Path(pattern=r"^[a-f0-9]{8,32}$")]
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+log = logging.getLogger("seraph_gui")
+
+
+def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastAPI:
+    cfg = config or config_module.load()
+    manager = ConnectionManager(cfg)
+    cache = SnapshotCache(lambda: manager, ttl_seconds=cfg.poll_interval)
+    jobs = JobService(manager)
+    occupancy = OccupancyHistory()
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        # SSH 비밀번호는 저장하지 않으므로 시작 시 무자격 자동 접속을 시도하지 않는다.
+        # Mock 모드만 자동 연결하고 SSH는 연결 화면의 명시적 요청을 기다린다.
+        if auto_connect and manager.mode != "ssh":
+            try:
+                await to_thread.run_sync(manager.connect)
+            except ApiError:
+                log.warning("SERAPH mock initial connection failed")
+        yield
+        await to_thread.run_sync(manager.close)
+
+    app = FastAPI(
+        title="SERAPH GUI API",
+        version="1.1.1",
+        lifespan=lifespan,
+        docs_url="/api/docs",
+        redoc_url=None,
+        openapi_url="/api/openapi.json",
+    )
+    app.state.manager = manager
+    app.state.cache = cache
+    app.state.jobs = jobs
+    app.state.occupancy = occupancy
+    install_error_handlers(app)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
+
+    async def cached_snapshot() -> tuple[Any, dict[str, Any]]:
+        cached = await cache.get()
+        # 새 Snapshot 이면 점유 추세에 한 점을 남긴다(중복은 내부에서 무시).
+        occupancy.record(cached)
+        meta = {
+            "age_seconds": round(cache.age_seconds or 0.0, 3),
+            "warning": cached.warning,
+        }
+        return cached.value, meta
+
+    @app.get("/api/v1/health")
+    async def health() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "mode": manager.mode,
+            "seraph_reachable": manager.connected,
+            "ssh_host": manager.host,
+            "ssh_port": manager.port,
+            "ssh_username": manager.username,
+            "snapshot_age_seconds": (
+                round(cache.age_seconds, 3) if cache.age_seconds is not None else None
+            ),
+        }
+
+    @app.post("/api/v1/session/connect")
+    async def connect_session(body: ConnectRequest) -> dict[str, Any]:
+        password = body.password.get_secret_value() if body.password else None
+        await to_thread.run_sync(lambda: manager.connect(
+            password=password,
+            username=body.username,
+            host=body.host,
+            port=body.port,
+        ))
+        cache.invalidate()
+        snapshot, _ = await cached_snapshot()
+        identity = services.whoami(snapshot)
+        if manager.mode == "ssh" and identity.get("user") and identity["user"] != manager.username:
+            await to_thread.run_sync(manager.close)
+            cache.invalidate()
+            raise ApiError(
+                "SSH_USERNAME_MISMATCH",
+                "입력한 사용자명과 SERAPH가 확인한 로그인 계정이 다릅니다.",
+                status_code=422,
+            )
+        return {"ok": True, "mode": manager.mode, "me": identity}
+
+    @app.post("/api/v1/session/disconnect")
+    async def disconnect_session() -> dict[str, Any]:
+        await to_thread.run_sync(manager.close)
+        cache.invalidate()
+        return {"ok": True, "mode": manager.mode, "seraph_reachable": manager.connected}
+
+    @app.get("/api/v1/me")
+    async def me() -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        return {"ok": True, **services.whoami(snapshot), "cache": cache_meta}
+
+    @app.get("/api/v1/tutorial")
+    async def get_tutorial_route() -> dict[str, Any]:
+        # 튜토리얼은 항상 mock 스냅샷 위에서 돈다(실서버 무관). SSH 연결 없이도 동작.
+        result = await to_thread.run_sync(tutorial.get_tutorial)
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/announcements")
+    async def announcements_route() -> dict[str, Any]:
+        # Slack 공지는 세라프 SSH 와 무관하다(토큰 없으면 mock). 실패해도 예외를 던지지 않는다.
+        def _fetch() -> dict[str, Any]:
+            client = slack.connect(cfg)
+            return slack.get_announcements(client, cfg.slack_channel, cfg.slack_limit)
+        return await to_thread.run_sync(_fetch)
+
+    @app.post("/api/v1/local/select-code")
+    async def select_local_code(
+        kind: Annotated[str, Query(pattern=r"^(directory|file)$")] = "directory",
+    ) -> dict[str, Any]:
+        selected = await to_thread.run_sync(lambda: select_code_path(kind))
+        return {"ok": True, "selected": bool(selected), "path": selected}
+
+    @app.get("/api/v1/cluster/status")
+    async def cluster_status(partition: str | None = None) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        return {"ok": True, **services.get_gpu_status(snapshot, partition), "cache": cache_meta}
+
+    @app.get("/api/v1/cluster/nodes")
+    async def cluster_nodes(
+        partition: str | None = None,
+        gpus: Annotated[int, Query(ge=1, le=16)] = 1,
+        high_perf: bool = False,
+    ) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        nodes = services.get_node_availability(
+            snapshot, partition=partition, need_gpus=gpus, high_perf=high_perf
+        )
+        return {"ok": True, "nodes": nodes, "count": len(nodes), "cache": cache_meta}
+
+    @app.get("/api/v1/cluster/partitions")
+    async def cluster_partitions() -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        return {"ok": True, "partitions": services.get_partitions(snapshot), "cache": cache_meta}
+
+    @app.get("/api/v1/clusters")
+    async def clusters_route() -> dict[str, Any]:
+        # 3개 클러스터 안내(정적). 실시간 아님, SSH 무관.
+        return {"ok": True, **clusters.overview()}
+
+    @app.get("/api/v1/cluster/usage")
+    async def cluster_usage() -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        return {"ok": True, **services.get_my_usage(snapshot, snapshot.me), "cache": cache_meta}
+
+    @app.post("/api/v1/cluster/refresh")
+    async def cluster_refresh() -> dict[str, Any]:
+        cached = await cache.force_refresh()
+        occupancy.record(cached)
+        return {
+            "ok": True,
+            "refreshed": cached.warning is None,
+            "warning": cached.warning,
+            "snapshot_age_seconds": round(cache.age_seconds or 0.0, 3),
+        }
+
+    @app.get("/api/v1/queue")
+    async def cluster_queue(partition: str | None = None) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        return {"ok": True, **services.get_queue(snapshot, partition), "cache": cache_meta}
+
+    @app.get("/api/v1/cluster/history")
+    async def cluster_history() -> dict[str, Any]:
+        samples = occupancy.samples()
+        return {"ok": True, "samples": samples, "count": len(samples)}
+
+    @app.post("/api/v1/recommendations")
+    async def recommendations(body: RecommendationRequest) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        conn = manager.require_connection()
+        result = await to_thread.run_sync(
+            lambda: placement.find_fastest(
+                conn,
+                snapshot,
+                gpus=body.gpus,
+                hours=body.hours,
+                high_perf=body.high_perf,
+                node=body.node,
+            )
+        )
+        return {"ok": True, **result, "cache": cache_meta}
+
+    @app.post("/api/v1/jobs/preview")
+    async def preview_job(body: PreviewRequest) -> dict[str, Any]:
+        snapshot, _ = await cached_snapshot()
+        built = sbatch.generate_sbatch(
+            snapshot,
+            name=body.name,
+            command=body.command,
+            partition=body.partition,
+            gpus=body.gpus,
+            high_perf=body.high_perf,
+            cpus=body.cpus,
+            mem=body.memory,
+            time_limit=body.time_limit,
+            node=body.node,
+            paths=body.paths,
+        )
+        return built
+
+    @app.get("/api/v1/jobs/diagnosis")
+    async def diagnose_jobs(partition: str | None = None) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        return {
+            "ok": True,
+            **services.diagnose_pending(snapshot, snapshot.me, partition),
+            "cache": cache_meta,
+        }
+
+    @app.post("/api/v1/jobs/validate")
+    async def validate_job(body: JobSpec) -> dict[str, Any]:
+        snapshot, _ = await cached_snapshot()
+        return await to_thread.run_sync(lambda: jobs.validate(body, snapshot))
+
+    @app.post("/api/v1/jobs/prepare")
+    async def prepare_job(body: JobSpec) -> dict[str, Any]:
+        snapshot, _ = await cached_snapshot()
+        return await to_thread.run_sync(lambda: jobs.prepare(body, snapshot))
+
+    @app.get("/api/v1/jobs/history")
+    async def job_history(
+        days: Annotated[int, Query(ge=1, le=60)] = 7,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        snapshot, _ = await cached_snapshot()
+        conn = manager.require_connection()
+        raw = await to_thread.run_sync(lambda: conn.sacct(days, snapshot.me))
+        return {"ok": True, **history.get_job_history(raw, limit=limit)}
+
+    @app.get("/api/v1/jobs/slurm/{job_id}")
+    async def slurm_job_result(
+        job_id: Annotated[str, Path(pattern=r"^[0-9]+$")],
+        days: Annotated[int, Query(ge=1, le=60)] = 7,
+    ) -> dict[str, Any]:
+        snapshot, _ = await cached_snapshot()
+        conn = manager.require_connection()
+        raw = await to_thread.run_sync(lambda: conn.sacct(days, snapshot.me))
+        result = history.get_job_result(raw, job_id)
+        if not result["found"]:
+            raise ApiError("JOB_NOT_FOUND", "완료 작업을 찾을 수 없습니다.", 404)
+        return {"ok": True, **result}
+
+    @app.get("/api/v1/jobs/eta/{job_id}")
+    async def job_eta(
+        job_id: Annotated[str, Path(pattern=r"^[0-9]+$")],
+    ) -> dict[str, Any]:
+        snapshot, cache_meta = await cached_snapshot()
+        result = services.estimate_wait_time(snapshot, job_id)
+        if not result.get("found"):
+            raise ApiError("JOB_NOT_FOUND", "대기열에서 작업을 찾을 수 없습니다.", 404)
+        return {"ok": True, **result, "cache": cache_meta}
+
+    @app.get("/api/v1/jobs")
+    async def list_jobs(limit: Annotated[int, Query(ge=1, le=100)] = 50) -> dict[str, Any]:
+        return await to_thread.run_sync(lambda: jobs.list(limit=limit))
+
+    @app.get("/api/v1/jobs/{local_job_id}")
+    async def get_job(local_job_id: LOCAL_JOB_ID) -> dict[str, Any]:
+        return await to_thread.run_sync(lambda: jobs.get(local_job_id))
+
+    @app.post("/api/v1/jobs/{local_job_id}/submit")
+    async def submit_job(local_job_id: LOCAL_JOB_ID, body: SubmitRequest) -> dict[str, Any]:
+        snapshot, _ = await cached_snapshot()
+        return await to_thread.run_sync(
+            lambda: jobs.submit(
+                local_job_id,
+                request_id=body.request_id,
+                confirmed=body.confirmed,
+                snapshot=snapshot,
+            )
+        )
+
+    @app.post("/api/v1/jobs/{local_job_id}/preflight")
+    async def preflight_job(local_job_id: LOCAL_JOB_ID) -> dict[str, Any]:
+        return await to_thread.run_sync(lambda: jobs.preflight(local_job_id))
+
+    @app.get("/api/v1/jobs/{local_job_id}/logs")
+    async def job_logs(
+        local_job_id: LOCAL_JOB_ID,
+        max_bytes: Annotated[int, Query(ge=1024, le=1_000_000)] = 128_000,
+    ) -> dict[str, Any]:
+        return await to_thread.run_sync(lambda: jobs.logs(local_job_id, max_bytes=max_bytes))
+
+    @app.post("/api/v1/jobs/{local_job_id}/cancel")
+    async def cancel_job(local_job_id: LOCAL_JOB_ID) -> dict[str, Any]:
+        return await to_thread.run_sync(lambda: jobs.cancel(local_job_id))
+
+    static_dir = ROOT / "frontend" / "dist"
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="gui")
+
+    return app
+
+
+app = create_app()

@@ -4,7 +4,7 @@ services 는 이 레이어를 모른다. 둘 다 Snapshot 을 돌려주므로 mo
 그대로 바꿔 끼울 수 있다.
 
     conn = MockConnection()          # 개발용, 서버 불필요
-    conn = SSHConnection('ariel')    # 실서버
+    conn = SSHConnection('ariel.khu.ac.kr', username='my-id', port=30080)
     snap = conn.snapshot()
 
 ControlMaster 는 OpenSSH 클라이언트 기능이라 paramiko 연결에는 적용되지 않는다.
@@ -158,7 +158,7 @@ class SSHConnection:
     최대 password_attempts 번까지 다시 물어본다(오타 대비).
     """
 
-    def __init__(self, host, password=None, config=None,
+    def __init__(self, host, username=None, port=None, password=None, config=None,
                  ask_password=None, password_attempts=3):
         import paramiko
 
@@ -167,14 +167,14 @@ class SSHConnection:
         self.host = host
         self.client = paramiko.SSHClient()
         self.client.load_system_host_keys()
-        # 세라프는 known_hosts 에 이미 있다. 처음 보는 호스트 키는 자동 수락하되
-        # (첫 접속 편의), 이후엔 바뀌면 거부된다.
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # 운영 GUI는 중간자 공격을 피하기 위해 known_hosts에 없는 호스트를 거부한다.
+        # 최초 접속은 사용자가 터미널의 ssh로 지문을 확인해 등록한 뒤 진행한다.
+        self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
         connect_args = dict(
             hostname=cfg.get('hostname', host),
-            port=int(cfg.get('port', 22)),
-            username=cfg.get('user'),
+            port=int(port if port is not None else cfg.get('port', 22)),
+            username=username or cfg.get('user'),
             key_filename=cfg.get('identityfile'),
             timeout=10,
         )
@@ -206,6 +206,13 @@ class SSHConnection:
             ask_password=ask_password,
             attempts=password_attempts,
         )
+        transport = self.client.get_transport()
+        self.username = (
+            transport.get_username() if transport is not None
+            else connect_args['username']
+        )
+        self.hostname = connect_args['hostname']
+        self.port = connect_args['port']
 
     @staticmethod
     def _ssh_config(host):

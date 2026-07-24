@@ -195,8 +195,7 @@ def test_lint_blocks_forbidden_high_perf():
 
 
 def test_lint_blocks_nas_and_over_limit(snap):
-    # 실제 마운트는 /nas2 다. /nas 라는 경로는 세라프에 존재하지 않는다.
-    r = services.lint_job(snap, gpus=999, paths=['/nas2/data/x'])
+    r = services.lint_job(snap, gpus=999, paths=['/data/datasets/x'])
     codes = {p['code'] for p in r['problems']}
     assert {'OVER_GPU_LIMIT', 'BLOCKED_PATH'} <= codes
     assert not r['ok']

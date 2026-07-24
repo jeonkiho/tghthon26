@@ -72,7 +72,7 @@ fixture는 실제 세라프 출력이다(`tests/fixtures/`). 다시 뽑으려면
 python -c "
 from seraph import commands
 print('\n'.join(f'echo \"@@@{k}\"; {v}' for k,v in commands.ALL.items()))
-" | ssh ariel bash -s
+" | ssh -p 30080 <사용자명>@ariel.khu.ac.kr bash -s
 ```
 
 ## 세라프에서 실제로 확인한 것들
@@ -88,7 +88,7 @@ print('\n'.join(f'echo \"@@@{k}\"; {v}' for k,v in commands.ALL.items()))
   거절 메시지가 안내하는 `-x` 로 고성능 노드를 제외하는 방법은 실제로는 통하지 않는다.
 - **`-w` 에 노드를 여러 개 적으면 전부 확보될 때까지 기다려 훨씬 늦어진다.**
 - **Slurm 22.05.2 에 JSON 플러그인이 없다.** `squeue --json` 은 죽는다. 텍스트 파싱이 필수다.
-- **실제 NAS 마운트는 `/nas2` 다.** `/nas` 라는 경로는 없다.
+- **현재 제공된 SERAPH 튜토리얼은 `/data` 전체를 NAS로 정의한다.** 학습 데이터는 `/local_datasets`로 복사한 뒤 읽는다.
 - **메모리 부족(OOM)으로 죽은 job 은 종료 코드가 0 이다** (`0:125`). 코드만 보면 성공으로 오해한다.
 - **`sacct` 의 MaxRSS 는 메인 행이 아니라 `.batch` 스텝 행에 있다.** `-X` 를 쓰면 그 값을 잃는다.
   반대로 ReqMem 은 메인 행에만 있다. 둘을 합쳐야 OOM 을 진단할 수 있다.

@@ -14,7 +14,8 @@ DEFAULT_PATH = ROOT / 'config.yaml'
 DEFAULTS = {
     'connection': {
         'mode': 'mock',
-        'host': 'ariel',
+        'host': 'ariel.khu.ac.kr',
+        'port': 30080,
         'poll_interval_seconds': 7,
         'login_node_load_limit': 8.0,
     },
@@ -48,12 +49,17 @@ DEFAULTS = {
         'undergrad_gpu_max': 16,      # 학부 연구원 기준
     },
     'lint': {
-        'blocked_paths': ['/nas2/'],
-        'warn_paths': ['/ceph_data/', '/home/'],
+        # 학습 코드의 직접 데이터 경로로 NAS(/data)를 넘기지 않는다.
+        'blocked_paths': ['/data/'],
+        'warn_paths': ['/home/'],
+    },
+    'storage': {
+        'data_root': '/data',
+        'local_datasets_root': '/local_datasets',
     },
     'sbatch': {
-        'default_cpus_per_task': 8,
-        'default_mem': '32G',
+        'default_cpus_per_gpu': 8,
+        'default_mem_per_gpu': '32G',
         'default_time': '24:00:00',
         'output_pattern': 'slurm-%j.out',
     },
@@ -92,6 +98,10 @@ class Config:
     @property
     def host(self):
         return self._data['connection']['host']
+
+    @property
+    def port(self):
+        return int(self._data['connection']['port'])
 
     @property
     def poll_interval(self):
@@ -134,6 +144,14 @@ class Config:
     @property
     def warn_paths(self):
         return list(self._data['lint']['warn_paths'])
+
+    @property
+    def data_root(self):
+        return self._data['storage']['data_root'].rstrip('/')
+
+    @property
+    def local_datasets_root(self):
+        return self._data['storage']['local_datasets_root'].rstrip('/')
 
     @property
     def sbatch(self):
