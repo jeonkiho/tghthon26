@@ -1081,26 +1081,57 @@ function tryAbsoluteConda(name,argv){
 function localGuard(name){ if(S.host==='local'){ out(`<span class="c-err">${name}: command not found</span>`); out('먼저 ssh 로 master 노드에 접속하세요.','c-dim'); return true; } return false; }
 
 /* ----- Slurm: slurm-gres-viz ----- */
+// 정렬 옵션. 기본은 노드 나열 순(=이름 순)이고, 실제로 쓸 노드를 고를 땐 가용 순이 편하다.
+const VIZ_SORTS = {
+  node:  { label:'노드 순(기본)',   cmp:null },
+  name:  { label:'이름 순',         cmp:(x,y)=>vizByName(x,y) },
+  free:  { label:'가용 많은 순',    cmp:(x,y)=> y.free-x.free || vizByName(x,y) },
+  used:  { label:'사용 많은 순',    cmp:(x,y)=> y.used-x.used || vizByName(x,y) },
+  total: { label:'GPU 많은 순',     cmp:(x,y)=> y.total-x.total || vizByName(x,y) },
+};
+const VIZ_ALIAS = { node:'node', name:'name', free:'free', avail:'free', available:'free', 가용:'free',
+                    used:'used', busy:'used', 사용:'used', total:'total', gpus:'total' };
+function vizByName(x,y){ return x.n.name.localeCompare(y.n.name, undefined, {numeric:true}); }
+function parseVizOpts(a){
+  const o={ sort:'node', reverse:false, bad:null };
+  (a||[]).forEach((tk,i)=>{
+    let m;
+    if(m=tk.match(/^--sort=(.*)$/))      o.sort = VIZ_ALIAS[m[1].toLowerCase()] || (o.bad=m[1], o.sort);
+    else if(tk==='--sort'||tk==='-s'){ const v=String(a[i+1]||'').toLowerCase();
+                                       o.sort = VIZ_ALIAS[v] || (o.bad=a[i+1]||'', o.sort); }
+    else if(tk==='-r'||tk==='--reverse') o.reverse=true;
+  });
+  return o;
+}
 def(['slurm-gres-viz'],(a)=>{
   if(localGuard('slurm-gres-viz')) return false;
+  const o=parseVizOpts(a);
   const cl=CLUSTERS[S.cluster];
-  const gpus=cl.nodes.filter(n=>n.type==='gpu');
-  let tot=0, used=0, hpTot=0, hpFree=0;
-  gpus.forEach(n=>{ const u=gpuUsed(n.name); tot+=n.gpus; used+=u; if(n.hp){ hpTot+=n.gpus; hpFree+=(n.gpus-u); } });
+  const rows=cl.nodes.filter(n=>n.type==='gpu').map(n=>{
+    const u=gpuUsed(n.name); return { n, used:u, total:n.gpus, free:n.gpus-u };
+  });
+  let tot=0, used=0, hpFree=0;
+  rows.forEach(r=>{ tot+=r.total; used+=r.used; if(r.n.hp) hpFree+=r.free; });
   const free=tot-used, stdFree=free-hpFree;
+  const cmp=(VIZ_SORTS[o.sort]||VIZ_SORTS.node).cmp;
+  if(cmp) rows.sort(cmp);
+  if(o.reverse) rows.reverse();
+
   out(`<span class="c-acc b">GPU 현황 · ${cl.label}</span>`);
   out(`  사용 가능 <span class="c-ok">${free}</span> / 전체 ${tot}  (고성능 ${hpFree} · 일반 ${stdFree})`);
+  if(o.bad!=null) out(`  <span class="c-warn">알 수 없는 정렬 키 '${esc(o.bad)}' — 기본 정렬을 씁니다. 가능: ${Object.keys(VIZ_SORTS).join(', ')}</span>`);
   out('&nbsp;');
-  out(' 노드          모델           가용/전체', 'c-dim');
-  gpus.forEach(n=>{
-    const u=gpuUsed(n.name), total=n.gpus, fr=total-u;
+  out(` 노드          모델           가용/전체        <span class="c-dim">정렬: ${VIZ_SORTS[o.sort].label}${o.reverse?' (역순)':''}</span>`, 'c-dim');
+  rows.forEach(({n,used:u,total,free:fr})=>{
     // ▓ = 사용가능(가용), ░ = 사용중. GUI(App.jsx)와 동일하게 ▓ 개수가 '가용' 숫자와 일치한다.
     let bar=''; for(let i=0;i<total;i++) bar+= i<fr?'<span class="c-ok">▓</span>':'<span class="blk-f">░</span>';
     const col=fr===0?'c-err':fr<=2?'c-warn':'c-ok';
     const tag=n.hp?'<span class="c-dim"> ·고성능</span>':'';
     out(`  ${n.name.padEnd(12)} ${n.model.padEnd(13)} <span class="${col}">${String(fr).padStart(2)}/${total}</span>  ${bar}${tag}`);
   });
-  out('&nbsp;'); out('▓ 사용가능  ░ 사용중  ·  고성능(k/m/n)은 별도 신청자만 · -i: interactive(1회 스냅샷)','c-dim');
+  out('&nbsp;');
+  out('▓ 사용가능  ░ 사용중  ·  고성능(k/m/n)은 별도 신청자만 · -i: interactive(1회 스냅샷)','c-dim');
+  out('정렬: <span class="c-acc">--sort=free</span> 가용 많은 순 · <span class="c-acc">used</span> · <span class="c-acc">name</span> · <span class="c-acc">total</span> · <span class="c-acc">-r</span> 역순','c-dim');
 });
 function gpuUsed(name){ const total=nodeInfo(name).gpus; let base=S.gpuUse[name]; if(base==null){ base=seededUse(name,total); S.gpuUse[name]=base; }
   // 내 srun/sbatch 잡이 이 노드를 쓰면 가산
@@ -1328,7 +1359,7 @@ const MAN={
   sbatch:'배치 잡 제출. #SBATCH 지시문이 담긴 .sh 스크립트를 제출하고 백그라운드로 실행. 예) sbatch hello.sh',
   squeue:'잡 큐 상태 조회 (JOBID/ST/NODELIST 등).',
   scancel:'잡 취소. 예) scancel 184620',
-  'slurm-gres-viz':'클러스터의 노드별 GPU 점유 현황 표시. -i 는 인터랙티브(스냅샷).',
+  'slurm-gres-viz':'클러스터의 노드별 GPU 점유 현황 표시. -i 는 인터랙티브(스냅샷). 정렬은 --sort=free|used|name|total (기본 node), -r 로 역순. 예) slurm-gres-viz --sort=free — 지금 여유 GPU 가 많은 노드부터 보여줘 -w 로 지정할 노드를 고르기 좋다.',
   'show-qos':'QOS별 자원 한도(MaxJobsPU 등) 확인.',
   'show-assoc':'내 계정이 속한 account/partition/QOS 확인.',
   ssh:'원격 접속. 예) ssh {user}@{master} · ssh {node} nvidia-smi · ssh {node} -t htop',
@@ -1611,7 +1642,7 @@ $('nextLesson').onclick=()=>gotoLesson(S.lesson+1);
 /* ============================ 명령어 사전 ============================ */
 function renderRef(){
   const groups=[
-    ['Slurm', ['slurm-gres-viz -i','srun --gres=gpu:1 --cpus-per-gpu=8 --mem-per-gpu=32G -p {dp} -w {node} --pty $SHELL','sbatch hello.sh','squeue','scancel','show-qos','show-assoc','sinfo']],
+    ['Slurm', ['slurm-gres-viz -i','slurm-gres-viz --sort=free','srun --gres=gpu:1 --cpus-per-gpu=8 --mem-per-gpu=32G -p {dp} -w {node} --pty $SHELL','sbatch hello.sh','squeue','scancel','show-qos','show-assoc','sinfo']],
     ['접속·이동', ['ssh {user}@{master}','exit','cd /data/$USER','pwd','ls -al']],
     ['파일', ['cat','mkdir logs','tree','grep','head','tail','cp','mv','rm','which python','find']],
     ['환경', ['conda init','conda activate','source ~/.bashrc','nvidia-smi','htop','vim hello.py']],
