@@ -218,3 +218,18 @@ button.hrow:hover{background:#f8fafc}
 .quota-note.hit{color:#c94c58}
 .quota-note.hit svg{color:#df5965}
 @media(max-width:1250px){.quota-grid-4{grid-template-columns:repeat(2,1fr)}}
+
+/* ---- 접속 카드: 학과·신분 기반 자동 선택 ---- */
+.connect-card select{width:100%;height:42px;border:1px solid #dce2eb;border-radius:8px;padding:0 10px;margin:10px 0;background:#fff;color:var(--ink)}
+.connect-card select:focus,.connect-card input:focus{outline:none;border-color:#67c9af;box-shadow:0 0 0 3px #3cc39f12}
+.seg-row{display:flex;gap:6px;background:#f3f5f8;border:1px solid var(--line);border-radius:9px;padding:4px;margin:10px 0}
+.seg-row button{flex:1;height:34px;border:0;background:transparent;border-radius:6px;font-size:11px;font-weight:600;color:#7a8699;transition:.15s}
+.seg-row button.on{background:#fff;color:#1d2740;box-shadow:0 1px 3px #1a294514}
+.connect-target{margin:10px 0 2px;padding:11px 12px;border-radius:8px;background:#f4f7fb;font-size:10px;color:#7a8699;text-align:left;line-height:1.55}
+.connect-target.ok{background:#eaf9f4;color:#1c8f6d}
+.connect-target strong{color:#17805f;font-size:11px}
+.connect-target code{background:#ffffffa6;border-radius:4px;padding:2px 6px;font-size:10px;color:#2a6b57}
+.link-toggle{border:0;background:transparent;color:#8b96a7;font-size:9px;text-decoration:underline;margin:9px 0 0;padding:0}
+.link-toggle:hover{color:#5d6a7e}
+.sort-select{font-size:9px;color:#5d6a7e;background:#f4f6f9;border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-width:170px;cursor:pointer}
+.sort-select:focus{outline:none;border-color:#67c9af}

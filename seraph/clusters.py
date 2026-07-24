@@ -214,10 +214,45 @@ def _kor(position, major):
     return ' '.join(parts)
 
 
+# 접속 화면용 표시 이름. 사용자에게 "호스트를 고르라"고 묻는 대신 학과·신분을 묻기 위한 것.
+MAJOR_LABELS = {
+    'ce': '컴퓨터공학과 (CE)',
+    'ee': '전자공학과 (EE)',
+    'bme': '생체의공학과 (BME)',
+    'ai': '인공지능학과 (AI)',
+    'swcon': '소프트웨어융합학과 (SWCON)',
+}
+
+# 교내/교외 SSH 포트. 가이드 기준(교내 22, 교외 30080).
+SSH_PORTS = {'on_campus': 22, 'off_campus': 30080}
+
+
+def routing_table():
+    """학과 × 신분 -> 클러스터. 화면이 이 정책을 다시 구현하지 않도록 서버가 알려준다.
+
+    접속 화면은 사용자에게 ariel/moana 중 무엇을 쓸지 묻지 않는다 — 그건 학과와
+    신분으로 이미 결정되는 값이다. 정책이 바뀌면 _ROUTING 만 고치면 화면도 따라온다.
+    (프론트에 표를 복사해두면 반드시 어긋난다.)
+    """
+    assign = {}
+    for major in MAJOR_LABELS:
+        for position in _KOR_POS:
+            target = cluster_for(major, position)
+            if target:
+                assign[f'{major}:{position}'] = target
+    return {
+        'majors': [{'key': k, 'label': v} for k, v in MAJOR_LABELS.items()],
+        'positions': [{'key': k, 'label': v} for k, v in _KOR_POS.items()],
+        'assign': assign,
+        'ssh_ports': dict(SSH_PORTS),
+    }
+
+
 def overview():
     """3개 클러스터 전체 그림. 튜토리얼/안내용."""
     return {
         'primary': PRIMARY,
         'note': '이 도구는 ariel 만 실시간 조회합니다. 나머지는 안내만 제공합니다.',
         'clusters': {name: c.to_dict() for name, c in CLUSTERS.items()},
+        'routing': routing_table(),
     }
