@@ -29,7 +29,7 @@
 .eta-badge.low{background:#fff4e2;color:#b97c20}
 .eta-badge.unknown{background:#f1f3f7;color:#8792a4}
 .queue-table{margin-top:14px}
-.queue-row{display:grid;grid-template-columns:30px minmax(120px,1.5fr) 74px minmax(94px,1fr) 92px;gap:10px;align-items:center;min-height:38px;border-top:1px solid #edf0f5;font-size:10px;color:#66728a}
+.queue-row{display:grid;grid-template-columns:30px minmax(120px,1.5fr) 74px minmax(94px,1fr) 116px;gap:10px;align-items:center;min-height:38px;border-top:1px solid #edf0f5;font-size:10px;color:#66728a}
 .queue-header{border:0;min-height:24px;color:#a0a9b9;font-size:8px;text-transform:uppercase;letter-spacing:.7px}
 .queue-row.mine{background:#eefaf6;border-radius:7px;border-top-color:transparent}
 .queue-row.mine .qpos{background:#21bd91;color:#fff}
@@ -233,3 +233,7 @@ button.hrow:hover{background:#f8fafc}
 .link-toggle:hover{color:#5d6a7e}
 .sort-select{font-size:9px;color:#5d6a7e;background:#f4f6f9;border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-width:170px;cursor:pointer}
 .sort-select:focus{outline:none;border-color:#67c9af}
+
+/* 예상 시작: 값이 오른쪽 정렬이라 헤더도 맞춘다. 날짜가 붙어 칸을 넓혔다. */
+.queue-header>span:last-child{text-align:right}
+.qeta em{font-style:normal;font-size:8px;color:#9aa5b6;margin-left:4px}
