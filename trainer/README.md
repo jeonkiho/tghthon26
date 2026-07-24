@@ -33,6 +33,10 @@ python -m http.server -d trainer 8080   # → http://localhost:8080/seraph-termi
 학과 × 신분 → 클러스터·계정·파티션 매핑은 실서버 코드(`seraph/clusters.py` 의 `_ROUTING`·
 `cluster_for`, `seraph/placement.py` 의 `partition_from_account`)와 QOS(`seraph/parsers/qos.py`:
 학부 `ugrad` = GPU 1, 대학원 `grad` = GPU 4, 둘 다 `high_perf=0`) 기준입니다.
-클러스터별 총 GPU 수·노드 이름도 `clusters.py`(ariel 182 / moana 121 / aurora 62)를 따릅니다.
+클러스터별 총 GPU 수·노드 이름도 `clusters.py`(ariel 182 / **moana 105** / aurora 62)를 따릅니다.
 운영 정책이 바뀌면 `seraph-terminal.html`의 `DEPTS` / `CLUSTERS` / `profileFor` 를 수정하세요.
-(노드별 세부 GPU 개수는 실서버가 공개하지 않아 총합이 맞도록 추정 배분했습니다.)
+
+**moana 는 실서버에서 직접 확인한 값입니다**(2026-07, 파티션 전수 조회):
+`r[1-5]` 4장씩 · `u[1-4,6,8]` 8장씩(u6 만 5장) · `y[1,3-7]` 8장(y6·y7 만 4장) = 105.
+가이드에 있던 `u5·u7·y2` 는 실제로 없습니다. ariel/aurora 는 접속해 보지 못해
+노드별 장수는 총합만 맞춘 추정입니다.

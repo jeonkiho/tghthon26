@@ -494,8 +494,9 @@ export default function App() {
         {clusterInfo && <article className="panel cluster-panel">
           <div className="panel-head"><div><p className="eyebrow">CLUSTERS</p><h2>클러스터 안내</h2></div><span>{clusterInfo.note}</span></div>
           {me?.on_primary === false && me?.cluster_notice && <div className="cluster-notice"><Icon name="warn" size={16}/><p>{me.cluster_notice}</p></div>}
-          <div className="cluster-cards">{Object.entries(clusterInfo.clusters).map(([name, c]) => <div className={`cluster-card ${me?.cluster === name ? "mine" : ""} ${c.connectable ? "" : "muted"}`} key={name}>
-            <div className="cc-head"><strong>{name}</strong><span className="cc-tags">{c.connectable && <em className="cc-live">실시간</em>}{me?.cluster === name && <em className="cc-mine">내 소속</em>}</span></div>
+          {/* '실시간'은 정적 표가 아니라 지금 붙어 있는 클러스터가 정한다(me.connected_cluster). */}
+          <div className="cluster-cards">{Object.entries(clusterInfo.clusters).map(([name, c]) => <div className={`cluster-card ${me?.cluster === name ? "mine" : ""} ${me?.connected_cluster === name ? "" : "muted"}`} key={name}>
+            <div className="cc-head"><strong>{name}</strong><span className="cc-tags">{me?.connected_cluster === name && <em className="cc-live">실시간</em>}{me?.cluster === name && <em className="cc-mine">내 소속</em>}</span></div>
             <div className="cc-gpu">{c.total_gpus}<span>GPU</span></div>
             <p className="cc-allowed">{c.allowed}</p>
             <p className="cc-host">{c.host}</p>

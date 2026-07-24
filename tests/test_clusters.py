@@ -219,6 +219,22 @@ def test_whoami_includes_description(grad):
 def test_overview_lists_three_clusters():
     o = clusters.overview()
     assert set(o['clusters']) == {'ariel', 'moana', 'aurora'}
-    assert o['clusters']['ariel']['connectable'] is True
-    assert o['clusters']['moana']['connectable'] is False
     assert o['primary'] == 'ariel'
+
+
+def test_overview_has_no_connectable_flag():
+    """어느 클러스터가 실시간인지는 정적 표가 아니라 '지금 접속한 곳'이 정한다.
+
+    예전 connectable 플래그는 ariel 계정만 있던 시절의 값이라, moana 에 붙어 있어도
+    ariel 이 '실시간'으로 표시되는 모순을 만들었다. whoami().connected_cluster 를 쓴다.
+    """
+    o = clusters.overview()
+    for name, c in o['clusters'].items():
+        assert 'connectable' not in c, f'{name} 에 connectable 이 남아 있다'
+
+
+def test_moana_topology_matches_real_server():
+    """실서버에서 확인한 moana(2026-07). 가이드의 121/u[1-8]/y[1-7] 은 낡은 값이었다."""
+    moana = clusters.CLUSTERS['moana']
+    assert moana.total_gpus == 105
+    assert moana.nodelist == 'moana-r[1-5], u[1-4,6,8], y[1,3-7]'

@@ -407,19 +407,28 @@
    ========================================================================== */
 
 /* ---------- 클러스터 토폴로지 (튜토리얼 1, 슬라이드 7 기준) ---------- */
-function gpuNodes(prefix, spec){ // spec: [{p:'r',n:5,model,mem,g,hp,ex}, ...]  hp: 고성능 노드 여부
+// spec: [{p:'r', n:5 | ids:[1,2,4], model, mem, g, hp, ex}, ...]   hp: 고성능 노드 여부
+// ids 를 주면 그 번호만 만든다 — 실서버 moana 는 u5·u7·y2 가 없어서 연속 번호가 아니다.
+function gpuNodes(prefix, spec){
   const out=[];
-  spec.forEach(s=>{ for(let i=1;i<=s.n;i++){ const ex=(s.ex&&s.ex[i])||{}; out.push({
-    name:`${prefix}-${s.p}${i}`, type:'gpu', model:ex.model||s.model, mem:ex.mem!=null?ex.mem:s.mem,
-    gpus:ex.g!=null?ex.g:s.g, hp:!!(ex.hp!=null?ex.hp:s.hp) }); } });
+  spec.forEach(s=>{
+    const ids = s.ids || Array.from({length:s.n}, (_,k)=>k+1);
+    ids.forEach(i=>{ const ex=(s.ex&&s.ex[i])||{}; out.push({
+      name:`${prefix}-${s.p}${i}`, type:'gpu', model:ex.model||s.model, mem:ex.mem!=null?ex.mem:s.mem,
+      gpus:ex.g!=null?ex.g:s.g, hp:!!(ex.hp!=null?ex.hp:s.hp) }); });
+  });
   return out;
 }
-// 실서버(seraph/clusters.py) 기준 토폴로지.
+// 토폴로지.
 //   ariel : ariel-v[1-13], g[1-5], k[1-2], m[1-2], n1   총 182 GPU  (AI 학부 + 모든 대학원생)
-//   moana : moana-y[1-7], r[1-5], u[1-8]                총 121 GPU  (CE·EE·BME 학부)
+//   moana : moana-r[1-5], u[1-4,6,8], y[1,3-7]          총 105 GPU  (CE·EE·BME 학부)
 //   aurora: aurora-g[1-8]                               총 62 GPU   (SWCON 학부)
-// 노드 이름과 클러스터별 총 GPU 수는 실데이터다. 노드별 세부 GPU 개수는 실서버가
-// 공개하지 않으므로(우리 도구는 ariel 만 접속) 총합이 맞도록 추정해 배분했다.
+//
+// moana 는 실서버에서 직접 확인한 값이다(2026-07, 파티션 11개 전수 조회):
+//   r 5대 = 4장씩 · u 6대 = 8장씩(u6 만 5장) · y 6대 = y1/3/4/5 8장, y6/y7 4장.
+//   가이드(clusters.py)에 적혀 있던 121 · u[1-8] · y[1-7] 은 낡은 값이었고,
+//   r 과 u 의 장수를 반대로 추정했던 것도 여기서 바로잡았다.
+// ariel/aurora 는 접속해 보지 못해 총합만 맞춘 추정 배분이다.
 // k/m/n 은 실서버에서 '고성능(high_perf)' 노드로, 따로 신청한 사람만 쓴다(hp:true).
 const CLUSTERS = {
   ariel:{ label:'ariel', master:'ariel-master', repNode:'ariel-v7',
@@ -432,9 +441,9 @@ const CLUSTERS = {
     partitions:['debug_ugrad','batch_ugrad','debug_grad','batch_grad'] },
   moana:{ label:'moana', master:'moana-master', repNode:'moana-r1',
     nodes:[ {name:'moana-master',type:'master'},{name:'moana-NAS',type:'nas'},
-      ...gpuNodes('moana',[{p:'r',n:5,model:'RTX 3090',mem:24,g:8},          // 40
-        {p:'u',n:8,model:'RTX 2080 Ti',mem:11,g:4},                          // 32
-        {p:'y',n:7,model:'RTX 3090',mem:24,g:7}]) ],                         // 49 → 총 121
+      ...gpuNodes('moana',[{p:'r',ids:[1,2,3,4,5],model:'RTX 3090',mem:24,g:4},        // 20
+        {p:'u',ids:[1,2,3,4,6,8],model:'RTX 3090',mem:24,g:8,ex:{6:{g:5}}},            // 45 (u6 만 5장)
+        {p:'y',ids:[1,3,4,5,6,7],model:'RTX 3090',mem:24,g:8,ex:{6:{g:4},7:{g:4}}}]) ], // 40 → 총 105
     partitions:['debug_ce_ugrad','batch_ce_ugrad','debug_eebme_ugrad','batch_eebme_ugrad'] },
   aurora:{ label:'aurora', master:'aurora-master', repNode:'aurora-g3',
     nodes:[ {name:'aurora-master',type:'master'},{name:'aurora-NAS',type:'nas'},

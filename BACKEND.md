@@ -42,8 +42,10 @@ python -m seraph.dump --host ariel --section status
 `conn.sacct(days=7)` 로 사용자가 요청할 때만 부른다.
 
 [clusters.py](seraph/clusters.py) — 세라프는 클러스터가 3개(ariel/moana/aurora)다.
-이 도구는 **ariel 만 접속**하고(나머지는 계정이 없다), 3개의 라우팅 규칙은 데이터로
-갖고 있어 "당신은 moana 를 쓰세요" 같은 안내를 한다. 파티션 접근(대학원 `*_grad` /
+계정만 있으면 **셋 다 접속**한다(접속 호스트가 설정값이다. moana 접속을 실제로 확인했다).
+어느 클러스터가 실시간인지는 정적 표가 아니라 `infer_cluster()` 가 노드 이름으로 판단하고
+`whoami().connected_cluster` 가 알려준다. 라우팅 규칙(학과×신분)은 데이터로 갖고 있어
+"당신은 moana 를 쓰세요" 같은 안내를 한다. 파티션 접근(대학원 `*_grad` /
 학부 `*_ugrad`)과 학부생 노드 제한(`ariel-v[6-12]`)도 여기 규칙을 따른다.
 
 [slack/](seraph/slack/)은 세라프와 무관한 별도 계통이다. Slack 공지 채널을 읽어
