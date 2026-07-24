@@ -189,3 +189,32 @@ button.hrow:hover{background:#f8fafc}
 .tut-guide-steps li.active .tgs-ck{border-color:#38c19a;color:#1aae84}
 .tut-guide-steps li.done .tgs-ck{background:#38c19a;border-color:#38c19a;color:#fff}
 @media(max-width:1250px){.tut-terminal-wrap{grid-template-columns:1fr}.tut-term{height:52vh}}
+
+/* ---- 내 할당량(QOS) 패널 ---- */
+.quota-panel{padding:21px 23px;margin-top:16px}
+.quota-meta{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+.qos-badge{font-size:9px;font-weight:700;color:#20a47f;background:#eaf9f4;border-radius:20px;padding:5px 11px;letter-spacing:.2px}
+.qos-sub{font-size:8px;color:#98a2b3}
+.quota-grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+.quota-cell{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fcfdfe}
+.qc-head{display:flex;align-items:center;gap:7px;color:#6b7789;font-size:10px;font-weight:600}
+.qc-head svg{color:#9aa5b6;flex:none}
+.qc-value{display:flex;align-items:baseline;gap:5px;margin:9px 0 8px}
+.qc-value strong{font-size:22px;line-height:1;color:#1d2740}
+.qc-value em{font-style:normal;font-size:11px;color:#98a2b3;font-weight:600}
+.qc-bar{height:6px;background:#edf0f4;border-radius:5px;overflow:hidden}
+.qc-bar i{display:block;height:100%;border-radius:5px;background:#38c19a;transition:width .3s}
+.qc-note{font-size:8px;color:#98a2b3;margin:7px 0 0}
+.quota-cell.warn .qc-bar i{background:var(--amber)}
+.quota-cell.warn .qc-note{color:#b97c20}
+.quota-cell.full{border-color:#f3ccd0;background:#fffafa}
+.quota-cell.full .qc-bar i{background:var(--red)}
+.quota-cell.full .qc-note{color:#c94c58;font-weight:600}
+.quota-cell.off{background:#f7f8fa}
+.quota-cell.off .qc-value strong,.quota-cell.off .qc-value em{color:#aeb6c2}
+.quota-cell.off .qc-bar i{background:#cfd5de}
+.quota-note{display:flex;align-items:center;gap:7px;font-size:9px;color:#8a94a6;margin:14px 0 0;line-height:1.5}
+.quota-note svg{color:#a6b0bf;flex:none}
+.quota-note.hit{color:#c94c58}
+.quota-note.hit svg{color:#df5965}
+@media(max-width:1250px){.quota-grid-4{grid-template-columns:repeat(2,1fr)}}

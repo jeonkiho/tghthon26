@@ -60,6 +60,65 @@ function Metric({ icon, label, value, detail, accent }) {
   </article>;
 }
 
+// 내 할당량(QOS) — show-qos / sacctmgr 가 주는 값을 그대로 대시보드로 보여준다.
+// 세라프에서 대기의 상당수는 GPU 부족이 아니라 이 한도 때문이라, 4종을 다 보여줘야 원인을 찾는다.
+const QUOTA_ROWS = [
+  { key: "gpu",  label: "GPU",          icon: "gpu",    used: (u) => u.gpus_in_use,      limit: (u) => u.gpus_limit },
+  { key: "hp",   label: "고성능 GPU",    icon: "spark",  used: (u) => u.high_perf_in_use, limit: (u) => u.high_perf_limit },
+  { key: "run",  label: "동시 실행 작업", icon: "jobs",   used: (u) => u.running_jobs,     limit: (u) => u.running_jobs_limit },
+  { key: "sub",  label: "제출 작업",     icon: "server", used: (u) => u.submitted_jobs,   limit: (u) => u.submit_jobs_limit },
+];
+
+// limit===0 은 "권한 없음"(기본 QOS 의 high_perf=0), limit===null 은 한도 없음.
+function quotaState(used, limit) {
+  if (limit === 0) return "off";
+  if (limit == null) return "free";
+  if (used >= limit) return "full";
+  return used / limit >= 0.8 ? "warn" : "ok";
+}
+
+function QuotaGauge({ label, icon, used, limit }) {
+  const state = quotaState(used, limit);
+  const pct = state === "off" || state === "free" ? 0 : Math.min(100, Math.round((used / limit) * 100));
+  const note = state === "off" ? "사용 권한 없음"
+    : state === "free" ? "한도 없음"
+    : state === "full" ? "한도 도달 · 추가 제출은 대기"
+    : `${limit - used}개 남음`;
+  return <div className={`quota-cell ${state}`}>
+    <div className="qc-head"><Icon name={icon} size={15}/><span>{label}</span></div>
+    <div className="qc-value"><strong>{used ?? "—"}</strong><em>/ {limit == null ? "∞" : limit}</em></div>
+    <div className="qc-bar"><i style={{ width: `${pct}%` }}/></div>
+    <p className="qc-note">{note}</p>
+  </div>;
+}
+
+function QuotaPanel({ usage, me }) {
+  const hit = usage ? QUOTA_ROWS.filter((r) => quotaState(r.used(usage), r.limit(usage)) === "full") : [];
+  const posLabel = me?.position === "undergrad" ? "학부" : me?.position === "grad" ? "대학원" : null;
+  return <article className="panel quota-panel">
+    <div className="panel-head">
+      <div><p className="eyebrow">MY QUOTA</p><h2>내 할당량</h2></div>
+      <div className="quota-meta">
+        {usage?.qos && <span className="qos-badge">QOS {usage.qos}</span>}
+        {(me?.account || posLabel) && <span className="qos-sub">{[me?.account, posLabel].filter(Boolean).join(" · ")}</span>}
+      </div>
+    </div>
+    {!usage
+      ? <div className="empty-mini"><Icon name="server" size={20}/><span>할당량을 불러오는 중입니다.</span></div>
+      : <>
+        <div className="quota-grid-4">
+          {QUOTA_ROWS.map((r) => <QuotaGauge key={r.key} label={r.label} icon={r.icon} used={r.used(usage)} limit={r.limit(usage)}/>)}
+        </div>
+        <p className={`quota-note ${hit.length ? "hit" : ""}`}>
+          <Icon name={hit.length ? "warn" : "check"} size={14}/>
+          {hit.length
+            ? `${hit.map((h) => h.label).join(" · ")} 한도에 도달했습니다 — 대기 중인 작업은 GPU 부족이 아니라 이 한도 때문일 수 있습니다.`
+            : "여유가 있습니다. 세라프 대기의 상당수는 GPU 부족이 아니라 이 QOS 한도 때문입니다."}
+        </p>
+      </>}
+  </article>;
+}
+
 function ErrorToast({ error, onClose }) {
   if (!error) return null;
   return <div className="toast" role="alert">
@@ -324,6 +383,7 @@ export default function App() {
           <Metric icon="jobs" label="실행 중인 작업" value={cluster?.running_jobs} detail={`대기 ${cluster?.pending_jobs ?? "—"}개`} accent="violet"/>
           <Metric icon="spark" label="내 GPU 사용" value={usage ? `${usage.gpus_in_use}/${usage.gpus_limit ?? "∞"}` : null} detail={`${usage?.pending_jobs ?? "—"}개 대기`} accent="amber"/>
         </div>
+        <QuotaPanel usage={usage} me={me}/>
         <article className="panel trend-panel">
           <div className="panel-head"><div><p className="eyebrow">OCCUPANCY TREND</p><h2>GPU 점유 추세</h2></div><span>{history.length}개 표본 · 폴링마다 기록</span></div>
           <TrendChart samples={history}/>
