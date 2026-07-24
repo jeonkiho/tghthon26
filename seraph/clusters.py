@@ -1,10 +1,17 @@
-"""세라프 = 3개 클러스터. 이 도구는 그중 ariel 만 실제로 접속한다.
+"""세라프 = 3개 클러스터. 계정만 있으면 셋 중 어디든 접속한다.
 
 출처: SERAPH KHU GPU Cluster User Guide (Notion). 서버 접속 없이도 알 수 있는
-"규칙 데이터" 라서 여기 코드로 박아둔다. moana/aurora 는 접속 계정이 없어
-실시간 데이터를 못 가져오지만, "당신은 저 서버를 써야 한다" 는 안내는 할 수 있다.
+"규칙 데이터" 라서 여기 코드로 박아둔다.
+
+한때는 ariel 계정밖에 없어서 "이 도구는 ariel 만 실시간 조회한다" 가 사실이었고,
+그 전제가 connectable 플래그와 안내 문구에 박혀 있었다. 지금은 접속 호스트가
+설정값이라 moana/aurora 에도 그대로 붙는다(실제로 moana 접속을 확인했다).
+그래서 "어느 클러스터가 실시간인가" 는 여기 표가 아니라 **지금 접속한 곳**이
+정한다 — infer_cluster() 로 노드 이름에서 판단하고, whoami() 가 그 값을 준다.
+표에 다시 박아두면 접속한 클러스터가 흐리게 표시되는 모순이 생긴다.
 
 주의: 이 표는 학기마다 바뀔 수 있다. 노드/정책이 달라지면 가이드를 다시 확인할 것.
+총 GPU 수·노드 목록은 실서버에서 확인한 값이다(moana: 2026-07 확인).
 Major×Position -> 어느 클러스터를 쓰는지가 핵심이다.
 """
 
@@ -18,34 +25,35 @@ class Cluster:
     total_gpus: int
     nodelist: str
     allowed: str            # 사람이 읽는 설명
-    connectable: bool       # 이 도구가 실제로 접속하는가
 
     def to_dict(self):
         return asdict(self)
 
 
+# connectable 플래그는 없앴다. 셋 다 접속 가능해서 늘 True 가 되는 값이었고,
+# 화면이 그걸 "실시간" 배지로 쓰는 바람에 접속한 moana 가 흐리게, 접속도 안 한
+# ariel 이 실시간으로 표시됐다. 실시간 여부는 whoami().connected_cluster 로 판단한다.
 CLUSTERS = {
     'ariel': Cluster(
         name='ariel', host='ariel.khu.ac.kr', total_gpus=182,
         nodelist='ariel-v[1-13], g[1-5], k[1-2], m[1-2], n1',
         allowed='AI 학부생 + 모든 대학원생',
-        connectable=True,
     ),
+    # 실서버 확인(2026-07): r 5대(4장) · u 6대(u1-4,u8=8장, u6=5장) · y 6대(y1,3,4,5=8장, y6,7=4장).
+    # 가이드에 있던 u5·u7·y2 는 어느 파티션에도 없다. 합계도 121 이 아니라 105 다.
     'moana': Cluster(
-        name='moana', host='moana.khu.ac.kr', total_gpus=121,
-        nodelist='moana-y[1-7], r[1-5], u[1-8]',
+        name='moana', host='moana.khu.ac.kr', total_gpus=105,
+        nodelist='moana-r[1-5], u[1-4,6,8], y[1,3-7]',
         allowed='EE/BME/CE 학부생',
-        connectable=False,
     ),
     'aurora': Cluster(
         name='aurora', host='aurora.khu.ac.kr', total_gpus=62,
         nodelist='aurora-g[1-8]',
         allowed='SWCON 학부생',
-        connectable=False,
     ),
 }
 
-# 이 도구가 접속하는 클러스터
+# 접속 대상을 못 알아냈을 때 쓰는 기본값. "여기만 접속한다"는 뜻이 아니다.
 PRIMARY = 'ariel'
 
 # Major × Position -> 클러스터.
@@ -166,7 +174,7 @@ def belongs_here(account, description=None):
       2. 계정 접미어로 학과 추정 -> Major×Position 표
       3. 대학원생이면 학과 무관 ariel
 
-    반환: {'cluster', 'connectable', 'on_primary', 'advice'}
+    반환: {'cluster', 'on_primary', 'advice'}
     """
     position = position_from_account(account)
     major = major_from_account(account)
@@ -185,16 +193,14 @@ def belongs_here(account, description=None):
     on_primary = target == PRIMARY
     result = {
         'cluster': target,
-        'connectable': bool(target and CLUSTERS[target].connectable),
         'on_primary': on_primary,
         'advice': '',
     }
     if target and not on_primary:
         c = CLUSTERS[target]
         result['advice'] = (
-            f'당신({_kor(position, major)})은 이 도구가 보는 ariel 이 아니라 '
-            f'{c.name}({c.host}) 클러스터를 사용합니다. '
-            f'거기로 접속하세요. 이 도구는 아직 ariel 만 지원합니다.'
+            f'당신({_kor(position, major)})은 지금 접속한 곳이 아니라 '
+            f'{c.name}({c.host}) 클러스터를 사용합니다. 거기로 접속하세요.'
         )
     elif target is None:
         result['advice'] = ('소속 클러스터를 계정으로 판단하지 못했습니다. '
@@ -214,10 +220,46 @@ def _kor(position, major):
     return ' '.join(parts)
 
 
+# 접속 화면용 표시 이름. 사용자에게 "호스트를 고르라"고 묻는 대신 학과·신분을 묻기 위한 것.
+MAJOR_LABELS = {
+    'ce': '컴퓨터공학과 (CE)',
+    'ee': '전자공학과 (EE)',
+    'bme': '생체의공학과 (BME)',
+    'ai': '인공지능학과 (AI)',
+    'swcon': '소프트웨어융합학과 (SWCON)',
+}
+
+# 교내/교외 SSH 포트. 가이드 기준(교내 22, 교외 30080).
+SSH_PORTS = {'on_campus': 22, 'off_campus': 30080}
+
+
+def routing_table():
+    """학과 × 신분 -> 클러스터. 화면이 이 정책을 다시 구현하지 않도록 서버가 알려준다.
+
+    접속 화면은 사용자에게 ariel/moana 중 무엇을 쓸지 묻지 않는다 — 그건 학과와
+    신분으로 이미 결정되는 값이다. 정책이 바뀌면 _ROUTING 만 고치면 화면도 따라온다.
+    (프론트에 표를 복사해두면 반드시 어긋난다.)
+    """
+    assign = {}
+    for major in MAJOR_LABELS:
+        for position in _KOR_POS:
+            target = cluster_for(major, position)
+            if target:
+                assign[f'{major}:{position}'] = target
+    return {
+        'majors': [{'key': k, 'label': v} for k, v in MAJOR_LABELS.items()],
+        'positions': [{'key': k, 'label': v} for k, v in _KOR_POS.items()],
+        'assign': assign,
+        'ssh_ports': dict(SSH_PORTS),
+    }
+
+
 def overview():
     """3개 클러스터 전체 그림. 튜토리얼/안내용."""
     return {
         'primary': PRIMARY,
-        'note': '이 도구는 ariel 만 실시간 조회합니다. 나머지는 안내만 제공합니다.',
+        # 어느 클러스터가 실시간인지는 여기서 정하지 않는다(접속한 곳이 실시간이다).
+        'note': '지금 접속한 클러스터만 실시간으로 조회합니다. 나머지는 안내만 제공합니다.',
         'clusters': {name: c.to_dict() for name, c in CLUSTERS.items()},
+        'routing': routing_table(),
     }

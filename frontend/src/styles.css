@@ -29,7 +29,7 @@
 .eta-badge.low{background:#fff4e2;color:#b97c20}
 .eta-badge.unknown{background:#f1f3f7;color:#8792a4}
 .queue-table{margin-top:14px}
-.queue-row{display:grid;grid-template-columns:30px minmax(120px,1.5fr) 74px minmax(94px,1fr) 92px;gap:10px;align-items:center;min-height:38px;border-top:1px solid #edf0f5;font-size:10px;color:#66728a}
+.queue-row{display:grid;grid-template-columns:30px minmax(120px,1.5fr) 74px minmax(94px,1fr) 116px;gap:10px;align-items:center;min-height:38px;border-top:1px solid #edf0f5;font-size:10px;color:#66728a}
 .queue-header{border:0;min-height:24px;color:#a0a9b9;font-size:8px;text-transform:uppercase;letter-spacing:.7px}
 .queue-row.mine{background:#eefaf6;border-radius:7px;border-top-color:transparent}
 .queue-row.mine .qpos{background:#21bd91;color:#fff}
@@ -189,3 +189,51 @@ button.hrow:hover{background:#f8fafc}
 .tut-guide-steps li.active .tgs-ck{border-color:#38c19a;color:#1aae84}
 .tut-guide-steps li.done .tgs-ck{background:#38c19a;border-color:#38c19a;color:#fff}
 @media(max-width:1250px){.tut-terminal-wrap{grid-template-columns:1fr}.tut-term{height:52vh}}
+
+/* ---- 내 할당량(QOS) 패널 ---- */
+.quota-panel{padding:21px 23px;margin-top:16px}
+.quota-meta{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+.qos-badge{font-size:9px;font-weight:700;color:#20a47f;background:#eaf9f4;border-radius:20px;padding:5px 11px;letter-spacing:.2px}
+.qos-sub{font-size:8px;color:#98a2b3}
+.quota-grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+.quota-cell{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fcfdfe}
+.qc-head{display:flex;align-items:center;gap:7px;color:#6b7789;font-size:10px;font-weight:600}
+.qc-head svg{color:#9aa5b6;flex:none}
+.qc-value{display:flex;align-items:baseline;gap:5px;margin:9px 0 8px}
+.qc-value strong{font-size:22px;line-height:1;color:#1d2740}
+.qc-value em{font-style:normal;font-size:11px;color:#98a2b3;font-weight:600}
+.qc-bar{height:6px;background:#edf0f4;border-radius:5px;overflow:hidden}
+.qc-bar i{display:block;height:100%;border-radius:5px;background:#38c19a;transition:width .3s}
+.qc-note{font-size:8px;color:#98a2b3;margin:7px 0 0}
+.quota-cell.warn .qc-bar i{background:var(--amber)}
+.quota-cell.warn .qc-note{color:#b97c20}
+.quota-cell.full{border-color:#f3ccd0;background:#fffafa}
+.quota-cell.full .qc-bar i{background:var(--red)}
+.quota-cell.full .qc-note{color:#c94c58;font-weight:600}
+.quota-cell.off{background:#f7f8fa}
+.quota-cell.off .qc-value strong,.quota-cell.off .qc-value em{color:#aeb6c2}
+.quota-cell.off .qc-bar i{background:#cfd5de}
+.quota-note{display:flex;align-items:center;gap:7px;font-size:9px;color:#8a94a6;margin:14px 0 0;line-height:1.5}
+.quota-note svg{color:#a6b0bf;flex:none}
+.quota-note.hit{color:#c94c58}
+.quota-note.hit svg{color:#df5965}
+@media(max-width:1250px){.quota-grid-4{grid-template-columns:repeat(2,1fr)}}
+
+/* ---- 접속 카드: 학과·신분 기반 자동 선택 ---- */
+.connect-card select{width:100%;height:42px;border:1px solid #dce2eb;border-radius:8px;padding:0 10px;margin:10px 0;background:#fff;color:var(--ink)}
+.connect-card select:focus,.connect-card input:focus{outline:none;border-color:#67c9af;box-shadow:0 0 0 3px #3cc39f12}
+.seg-row{display:flex;gap:6px;background:#f3f5f8;border:1px solid var(--line);border-radius:9px;padding:4px;margin:10px 0}
+.seg-row button{flex:1;height:34px;border:0;background:transparent;border-radius:6px;font-size:11px;font-weight:600;color:#7a8699;transition:.15s}
+.seg-row button.on{background:#fff;color:#1d2740;box-shadow:0 1px 3px #1a294514}
+.connect-target{margin:10px 0 2px;padding:11px 12px;border-radius:8px;background:#f4f7fb;font-size:10px;color:#7a8699;text-align:left;line-height:1.55}
+.connect-target.ok{background:#eaf9f4;color:#1c8f6d}
+.connect-target strong{color:#17805f;font-size:11px}
+.connect-target code{background:#ffffffa6;border-radius:4px;padding:2px 6px;font-size:10px;color:#2a6b57}
+.link-toggle{border:0;background:transparent;color:#8b96a7;font-size:9px;text-decoration:underline;margin:9px 0 0;padding:0}
+.link-toggle:hover{color:#5d6a7e}
+.sort-select{font-size:9px;color:#5d6a7e;background:#f4f6f9;border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-width:170px;cursor:pointer}
+.sort-select:focus{outline:none;border-color:#67c9af}
+
+/* 예상 시작: 값이 오른쪽 정렬이라 헤더도 맞춘다. 날짜가 붙어 칸을 넓혔다. */
+.queue-header>span:last-child{text-align:right}
+.qeta em{font-style:normal;font-size:8px;color:#9aa5b6;margin-left:4px}

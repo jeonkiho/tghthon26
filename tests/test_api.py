@@ -59,8 +59,12 @@ def test_health_and_dashboard_apis():
         overview = client.get("/api/v1/clusters").json()
         assert overview["primary"] == "ariel"
         assert set(overview["clusters"]) == {"ariel", "moana", "aurora"}
-        assert overview["clusters"]["ariel"]["connectable"] is True
-        assert overview["clusters"]["moana"]["connectable"] is False
+        # 실시간 여부는 이 정적 표가 아니라 whoami().connected_cluster 가 정한다.
+        assert "connectable" not in overview["clusters"]["moana"]
+        assert overview["clusters"]["moana"]["total_gpus"] == 105
+        # 학과 -> 클러스터 라우팅을 화면이 다시 구현하지 않도록 서버가 내려준다.
+        assert overview["routing"]["assign"]["ce:undergrad"] == "moana"
+        assert overview["routing"]["assign"]["ce:grad"] == "ariel"
 
 
 def test_queue_eta_and_history_apis():

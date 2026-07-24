@@ -72,9 +72,10 @@ QOS 한도는 **사람마다 다르다** (`grad` 는 GPU 4개 + 고성능 금지
 없지만, 튜토리얼에서 사용자에게 알려줄 내용이다. 고성능(`gpu:high_perf:N`)은
 노드 지정 없이 통과한다. 아래 모든 규칙은 `sbatch --test-only` 로 실제 확인했다.
 
-**5. 세라프는 클러스터가 3개다. 이 도구는 ariel 만 접속한다.**
+**5. 세라프는 클러스터가 3개다. 계정만 있으면 셋 다 접속한다.**
 ariel(AI 학부+모든 대학원생) / moana(EE/BME/CE 학부) / aurora(SWCON 학부).
-접속한 사용자가 ariel 소속이 아니면 `whoami()` 가 "moana 로 가세요" 안내를 준다.
+어느 클러스터가 실시간인지는 정적 표가 아니라 `whoami().connected_cluster` 가 정한다.
+접속한 사용자가 자기 소속이 아닌 클러스터에 붙으면 `whoami()` 가 "moana 로 가세요" 안내를 준다.
 ariel 안에서도 **대학원생은 `*_grad`, 학부생은 `*_ugrad`** 파티션만 쓸 수 있고
 (서버가 강제), 학부생은 `ariel-v[6-12]` 노드만 쓴다. `get_partitions()` 의
 `can_use` 로 프론트가 회색/자물쇠 처리하면 된다.
@@ -201,11 +202,17 @@ Slurm 에게 직접 물어본다(우선순위·backfill·QOS 를 다 계산한 �
 ```json
 {
   "primary": "ariel",
-  "note": "이 도구는 ariel 만 실시간 조회합니다. 나머지는 안내만 제공합니다.",
+  "note": "지금 접속한 클러스터만 실시간으로 조회합니다. 나머지는 안내만 제공합니다.",
   "clusters": {
-    "ariel":  {"host": "ariel.khu.ac.kr",  "total_gpus": 182, "allowed": "AI 학부생 + 모든 대학원생", "connectable": true},
-    "moana":  {"host": "moana.khu.ac.kr",  "total_gpus": 121, "allowed": "EE/BME/CE 학부생", "connectable": false},
-    "aurora": {"host": "aurora.khu.ac.kr", "total_gpus": 62,  "allowed": "SWCON 학부생", "connectable": false}
+    "ariel":  {"host": "ariel.khu.ac.kr",  "total_gpus": 182, "allowed": "AI 학부생 + 모든 대학원생"},
+    "moana":  {"host": "moana.khu.ac.kr",  "total_gpus": 105, "allowed": "EE/BME/CE 학부생"},
+    "aurora": {"host": "aurora.khu.ac.kr", "total_gpus": 62,  "allowed": "SWCON 학부생"}
+  },
+  "routing": {
+    "majors":    [{"key": "ce", "label": "컴퓨터공학과 (CE)"}, "…"],
+    "positions": [{"key": "undergrad", "label": "학부생"}, {"key": "grad", "label": "대학원생"}],
+    "assign":    {"ce:undergrad": "moana", "ce:grad": "ariel", "ai:undergrad": "ariel", "swcon:undergrad": "aurora"},
+    "ssh_ports": {"on_campus": 22, "off_campus": 30080}
   }
 }
 ```

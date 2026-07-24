@@ -60,6 +60,131 @@ function Metric({ icon, label, value, detail, accent }) {
   </article>;
 }
 
+// 내 할당량(QOS) — show-qos / sacctmgr 가 주는 값을 그대로 대시보드로 보여준다.
+// 세라프에서 대기의 상당수는 GPU 부족이 아니라 이 한도 때문이라, 4종을 다 보여줘야 원인을 찾는다.
+const QUOTA_ROWS = [
+  { key: "gpu",  label: "GPU",          icon: "gpu",    used: (u) => u.gpus_in_use,      limit: (u) => u.gpus_limit },
+  { key: "hp",   label: "고성능 GPU",    icon: "spark",  used: (u) => u.high_perf_in_use, limit: (u) => u.high_perf_limit },
+  { key: "run",  label: "동시 실행 작업", icon: "jobs",   used: (u) => u.running_jobs,     limit: (u) => u.running_jobs_limit },
+  { key: "sub",  label: "제출 작업",     icon: "server", used: (u) => u.submitted_jobs,   limit: (u) => u.submit_jobs_limit },
+];
+
+// limit===0 은 "권한 없음"(기본 QOS 의 high_perf=0), limit===null 은 한도 없음.
+function quotaState(used, limit) {
+  if (limit === 0) return "off";
+  if (limit == null) return "free";
+  if (used >= limit) return "full";
+  return used / limit >= 0.8 ? "warn" : "ok";
+}
+
+function QuotaGauge({ label, icon, used, limit }) {
+  const state = quotaState(used, limit);
+  const pct = state === "off" || state === "free" ? 0 : Math.min(100, Math.round((used / limit) * 100));
+  const note = state === "off" ? "사용 권한 없음"
+    : state === "free" ? "한도 없음"
+    : state === "full" ? "한도 도달 · 추가 제출은 대기"
+    : `${limit - used}개 남음`;
+  return <div className={`quota-cell ${state}`}>
+    <div className="qc-head"><Icon name={icon} size={15}/><span>{label}</span></div>
+    <div className="qc-value"><strong>{used ?? "—"}</strong><em>/ {limit == null ? "∞" : limit}</em></div>
+    <div className="qc-bar"><i style={{ width: `${pct}%` }}/></div>
+    <p className="qc-note">{note}</p>
+  </div>;
+}
+
+function QuotaPanel({ usage, me }) {
+  const hit = usage ? QUOTA_ROWS.filter((r) => quotaState(r.used(usage), r.limit(usage)) === "full") : [];
+  const posLabel = me?.position === "undergrad" ? "학부" : me?.position === "grad" ? "대학원" : null;
+  return <article className="panel quota-panel">
+    <div className="panel-head">
+      <div><p className="eyebrow">MY QUOTA</p><h2>내 할당량</h2></div>
+      <div className="quota-meta">
+        {usage?.qos && <span className="qos-badge">QOS {usage.qos}</span>}
+        {(me?.account || posLabel) && <span className="qos-sub">{[me?.account, posLabel].filter(Boolean).join(" · ")}</span>}
+      </div>
+    </div>
+    {!usage
+      ? <div className="empty-mini"><Icon name="server" size={20}/><span>할당량을 불러오는 중입니다.</span></div>
+      : <>
+        <div className="quota-grid-4">
+          {QUOTA_ROWS.map((r) => <QuotaGauge key={r.key} label={r.label} icon={r.icon} used={r.used(usage)} limit={r.limit(usage)}/>)}
+        </div>
+        <p className={`quota-note ${hit.length ? "hit" : ""}`}>
+          <Icon name={hit.length ? "warn" : "check"} size={14}/>
+          {hit.length
+            ? `${hit.map((h) => h.label).join(" · ")} 한도에 도달했습니다 — 대기 중인 작업은 GPU 부족이 아니라 이 한도 때문일 수 있습니다.`
+            : "여유가 있습니다. 세라프 대기의 상당수는 GPU 부족이 아니라 이 QOS 한도 때문입니다."}
+        </p>
+      </>}
+  </article>;
+}
+
+// 접속 화면. 사용자에게 ariel/moana 중 무엇을 쓸지 묻지 않는다 — 학과 × 신분으로 이미
+// 정해지는 값이라(서버 clusters.routing_table()), 학과·신분·교내외만 받고 호스트/포트는 자동으로 정한다.
+// 규칙에서 벗어나는 계정을 위해 "직접 지정" 도 남겨둔다.
+const FALLBACK_POSITIONS = [{ key: "undergrad", label: "학부생" }, { key: "grad", label: "대학원생" }];
+const FALLBACK_PORTS = { on_campus: 22, off_campus: 30080 };
+
+function ConnectCard({ mode, clusters, routing, health, loading, onConnect }) {
+  const [username, setUsername] = useState(health?.ssh_username || "");
+  const [major, setMajor] = useState("");
+  const [position, setPosition] = useState("undergrad");
+  const [offCampus, setOffCampus] = useState(true);
+  const [manual, setManual] = useState(false);
+  const [host, setHost] = useState(health?.ssh_host || "");
+  const [port, setPort] = useState(health?.ssh_port ? String(health.ssh_port) : "");
+  const [password, setPassword] = useState("");
+
+  const ports = routing?.ssh_ports || FALLBACK_PORTS;
+  const positions = routing?.positions?.length ? routing.positions : FALLBACK_POSITIONS;
+  const autoCluster = routing && major ? routing.assign[`${major}:${position}`] : null;
+  const autoHost = autoCluster ? clusters?.[autoCluster]?.host : null;
+  const autoPort = offCampus ? ports.off_campus : ports.on_campus;
+  const effHost = manual ? host : autoHost || "";
+  const effPort = manual ? port : String(autoPort);
+  const ready = mode !== "ssh" || Boolean(username && effHost && effPort);
+  const submit = () => { if (ready && !loading) onConnect({ username, host: effHost, port: effPort, password }); };
+
+  return <div className="connect-overlay"><div className="connect-card">
+    <div className="connect-logo"><Icon name="server" size={30}/></div>
+    <p className="eyebrow">SERAPH CONNECTION</p>
+    <h2>서버 연결이 필요합니다</h2>
+    <p>학과와 신분을 고르면 접속할 클러스터를 자동으로 정합니다. 비밀번호는 저장하지 않습니다.</p>
+    {mode === "ssh" && <>
+      <input autoComplete="username" placeholder="SERAPH 사용자명" value={username} onChange={(e) => setUsername(e.target.value)}/>
+      <select value={major} onChange={(e) => setMajor(e.target.value)} aria-label="학과">
+        <option value="">학과 선택</option>
+        {(routing?.majors || []).map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+      </select>
+      <div className="seg-row" role="group" aria-label="신분">
+        {positions.map((p) => <button key={p.key} type="button" className={position === p.key ? "on" : ""} onClick={() => setPosition(p.key)}>{p.label}</button>)}
+      </div>
+      <div className="seg-row" role="group" aria-label="접속 위치">
+        <button type="button" className={offCampus ? "" : "on"} onClick={() => setOffCampus(false)}>교내 · {ports.on_campus}</button>
+        <button type="button" className={offCampus ? "on" : ""} onClick={() => setOffCampus(true)}>교외 · {ports.off_campus}</button>
+      </div>
+      <div className={`connect-target ${!manual && autoCluster ? "ok" : ""}`}>
+        {manual ? "직접 지정한 주소로 접속합니다."
+          : autoCluster ? <><strong>{autoCluster}</strong> 클러스터 · <code>{autoHost}:{autoPort}</code></>
+          : "학과를 선택하면 접속할 클러스터가 정해집니다."}
+      </div>
+      {manual && <div className="connect-endpoint">
+        <select value={host} onChange={(e) => setHost(e.target.value)} aria-label="호스트">
+          <option value="">호스트 선택</option>
+          {Object.values(clusters || {}).map((c) => <option key={c.host} value={c.host}>{c.name} · {c.host}</option>)}
+        </select>
+        <input type="number" min="1" max="65535" placeholder="포트" value={port} onChange={(e) => setPort(e.target.value)}/>
+      </div>}
+      <input type="password" autoComplete="off" placeholder="SSH 비밀번호 (키 인증이면 비워 두기)" value={password}
+        onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}/>
+      <button type="button" className="link-toggle" onClick={() => setManual((v) => !v)}>
+        {manual ? "← 학과로 자동 선택하기" : "호스트·포트 직접 지정"}
+      </button>
+    </>}
+    <button className="primary full" onClick={submit} disabled={loading || !ready}>{loading ? "연결 중…" : "SERAPH 연결"}</button>
+  </div></div>;
+}
+
 function ErrorToast({ error, onClose }) {
   if (!error) return null;
   return <div className="toast" role="alert">
@@ -67,6 +192,14 @@ function ErrorToast({ error, onClose }) {
     <button onClick={onClose} aria-label="닫기"><Icon name="close" size={18}/></button>
   </div>;
 }
+
+// 노드 표 정렬. 기본은 이름순이고, '사용 가능순'은 빠른 실행 추천과 같은 관점(여유 많은 노드 우선)이다.
+const NODE_SORT_KEY = "seraph_node_sort";
+const NODE_SORTS = {
+  name:  { label: "이름순", cmp: null },
+  free:  { label: "사용 가능 GPU 많은 순", cmp: (a, b) => (b.usable_gpus ?? 0) - (a.usable_gpus ?? 0) },
+  total: { label: "전체 GPU 많은 순",      cmp: (a, b) => (b.total_gpus ?? 0) - (a.total_gpus ?? 0) },
+};
 
 const blankForm = {
   name: "image-train", local_code_path: "", entrypoint: "train.py", argsText: "--data\n{dataset}\n--output\n{output}",
@@ -103,10 +236,14 @@ export default function App() {
   const [logs, setLogs] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [password, setPassword] = useState("");
-  const [sshUsername, setSshUsername] = useState("");
-  const [sshHost, setSshHost] = useState("");
-  const [sshPort, setSshPort] = useState("");
+  // 접속 폼 상태(사용자명·학과·비밀번호)는 ConnectCard 안에 있다.
+  // 연결에 성공하면 카드가 언마운트되면서 비밀번호도 함께 사라진다.
+
+  // 노드 표 정렬 기준. 한 번 고르면 다음에 들어와도 그대로 쓰도록 저장한다.
+  const [nodeSort, setNodeSort] = useState(() => {
+    try { return localStorage.getItem(NODE_SORT_KEY) || "name"; } catch { return "name"; }
+  });
+  useEffect(() => { try { localStorage.setItem(NODE_SORT_KEY, nodeSort); } catch { /* 저장 실패는 무시 */ } }, [nodeSort]);
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
 
   const report = useCallback((err) => setError({ code: err.code, message: err.message }), []);
@@ -145,10 +282,7 @@ export default function App() {
   const initialize = useCallback(async () => {
     try {
       const data = await api("/api/v1/health"); setHealth(data);
-      api("/api/v1/clusters").then(setClusterInfo).catch(() => {});  // 정적 안내, 1회만
-      setSshUsername((old) => old || data.ssh_username || "");
-      setSshHost((old) => old || data.ssh_host || "ariel.khu.ac.kr");
-      setSshPort((old) => old || String(data.ssh_port || 30080));
+      api("/api/v1/clusters").then(setClusterInfo).catch(() => {});  // 정적 안내(라우팅 표 포함), 1회만
       if (data.seraph_reachable) await Promise.all([loadDashboard(), loadJobs()]);
     } catch (err) { report(err); }
   }, [loadDashboard, loadJobs, report]);
@@ -271,17 +405,17 @@ export default function App() {
     await api(`/api/v1/jobs/${localId}/cancel`, { method: "POST" }); await openJob(localId); await loadJobs();
   });
 
-  const connect = () => runAction(async () => {
+  const connect = ({ username, host, port, password }) => runAction(async () => {
     await api("/api/v1/session/connect", {
       method: "POST",
       body: JSON.stringify({
-        username: sshUsername || null,
-        host: sshHost || null,
-        port: sshPort ? Number(sshPort) : null,
+        username: username || null,
+        host: host || null,
+        port: port ? Number(port) : null,
         password: password || null,
       }),
     });
-    setPassword(""); await initialize();
+    await initialize();
   });
 
   const refreshAll = () => runAction(async () => {
@@ -299,8 +433,14 @@ export default function App() {
   const nav = [
     ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
   ];
-  const visibleNodes = cluster?.nodes?.slice(0, 8) || nodes.slice(0, 8);
-  const hostOptions = clusterInfo ? Object.values(clusterInfo.clusters).map((c) => ({ host: c.host, name: c.name })) : [];
+  // 정렬한 뒤에 자르므로, '사용 가능순'이면 여유 많은 노드 8개가 위로 온다(-w 로 고를 노드 찾기).
+  const visibleNodes = useMemo(() => {
+    const list = [...(cluster?.nodes?.length ? cluster.nodes : nodes)];
+    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+    const cmp = NODE_SORTS[nodeSort]?.cmp;
+    list.sort(cmp ? (a, b) => cmp(a, b) || byName(a, b) : byName);
+    return list.slice(0, 8);
+  }, [cluster, nodes, nodeSort]);
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -324,12 +464,13 @@ export default function App() {
           <Metric icon="jobs" label="실행 중인 작업" value={cluster?.running_jobs} detail={`대기 ${cluster?.pending_jobs ?? "—"}개`} accent="violet"/>
           <Metric icon="spark" label="내 GPU 사용" value={usage ? `${usage.gpus_in_use}/${usage.gpus_limit ?? "∞"}` : null} detail={`${usage?.pending_jobs ?? "—"}개 대기`} accent="amber"/>
         </div>
+        <QuotaPanel usage={usage} me={me}/>
         <article className="panel trend-panel">
           <div className="panel-head"><div><p className="eyebrow">OCCUPANCY TREND</p><h2>GPU 점유 추세</h2></div><span>{history.length}개 표본 · 폴링마다 기록</span></div>
           <TrendChart samples={history}/>
         </article>
         <div className="dashboard-grid">
-          <article className="panel resource-panel"><div className="panel-head"><div><p className="eyebrow">RESOURCE MAP</p><h2>노드 가용 현황</h2></div><span>사용 가능 GPU 기준</span></div>
+          <article className="panel resource-panel"><div className="panel-head"><div><p className="eyebrow">RESOURCE MAP</p><h2>노드 가용 현황</h2></div><select className="sort-select" value={nodeSort} onChange={(e) => setNodeSort(e.target.value)} aria-label="노드 정렬 기준">{Object.entries(NODE_SORTS).map(([key, s]) => <option key={key} value={key}>{s.label}</option>)}</select></div>
             <div className="node-table"><div className="node-row node-header"><span>노드</span><span>유형</span><span>상태</span><span>사용 가능</span><span>GPU</span></div>{visibleNodes.map((node) => <div className="node-row" key={node.name}><strong>{node.name}</strong><span>{node.is_high_perf ? "고성능" : "일반"}</span><span className={node.schedulable ? "node-ok" : "node-off"}>{node.schedulable ? "사용 가능" : node.state}</span><span>{node.usable_gpus} / {node.total_gpus}</span><div className="mini-bar"><i style={{ width: `${node.total_gpus ? node.usable_gpus / node.total_gpus * 100 : 0}%` }}/></div></div>)}</div>
           </article>
           <article className="panel quick-panel"><div className="panel-head"><div><p className="eyebrow">QUICK START</p><h2>빠른 실행 추천</h2></div><div className="spark-badge"><Icon name="spark" size={17}/></div></div>
@@ -353,8 +494,9 @@ export default function App() {
         {clusterInfo && <article className="panel cluster-panel">
           <div className="panel-head"><div><p className="eyebrow">CLUSTERS</p><h2>클러스터 안내</h2></div><span>{clusterInfo.note}</span></div>
           {me?.on_primary === false && me?.cluster_notice && <div className="cluster-notice"><Icon name="warn" size={16}/><p>{me.cluster_notice}</p></div>}
-          <div className="cluster-cards">{Object.entries(clusterInfo.clusters).map(([name, c]) => <div className={`cluster-card ${me?.cluster === name ? "mine" : ""} ${c.connectable ? "" : "muted"}`} key={name}>
-            <div className="cc-head"><strong>{name}</strong><span className="cc-tags">{c.connectable && <em className="cc-live">실시간</em>}{me?.cluster === name && <em className="cc-mine">내 소속</em>}</span></div>
+          {/* '실시간'은 정적 표가 아니라 지금 붙어 있는 클러스터가 정한다(me.connected_cluster). */}
+          <div className="cluster-cards">{Object.entries(clusterInfo.clusters).map(([name, c]) => <div className={`cluster-card ${me?.cluster === name ? "mine" : ""} ${me?.connected_cluster === name ? "" : "muted"}`} key={name}>
+            <div className="cc-head"><strong>{name}</strong><span className="cc-tags">{me?.connected_cluster === name && <em className="cc-live">실시간</em>}{me?.cluster === name && <em className="cc-mine">내 소속</em>}</span></div>
             <div className="cc-gpu">{c.total_gpus}<span>GPU</span></div>
             <p className="cc-allowed">{c.allowed}</p>
             <p className="cc-host">{c.host}</p>
@@ -430,7 +572,7 @@ export default function App() {
       </section>}
     </main>
 
-    {health && !health.seraph_reachable && <div className="connect-overlay"><div className="connect-card"><div className="connect-logo"><Icon name="server" size={30}/></div><p className="eyebrow">SERAPH CONNECTION</p><h2>서버 연결이 필요합니다</h2><p>입력한 사용자명은 SSH 로그인과 <code>/data/사용자명</code> 작업 경로에 사용합니다. 비밀번호는 저장하지 않습니다.</p>{health.mode === "ssh" && <><input autoComplete="username" placeholder="SERAPH 사용자명" value={sshUsername} onChange={(e) => setSshUsername(e.target.value)}/><div className="connect-endpoint"><select value={sshHost} onChange={(e) => setSshHost(e.target.value)}>{hostOptions.map((o) => <option key={o.host} value={o.host}>{o.name} · {o.host}</option>)}{sshHost && !hostOptions.some((o) => o.host === sshHost) && <option value={sshHost}>{sshHost}</option>}</select><input type="number" min="1" max="65535" placeholder="포트" value={sshPort} onChange={(e) => setSshPort(e.target.value)}/></div><input type="password" autoComplete="off" placeholder="SSH 비밀번호 (키 인증이면 비워 두기)" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && connect()}/></>}<button className="primary full" onClick={connect} disabled={loading || (health.mode === "ssh" && (!sshUsername || !sshHost || !sshPort))}>{loading ? "연결 중…" : "SERAPH 연결"}</button></div></div>}
+    {health && !health.seraph_reachable && <ConnectCard mode={health.mode} clusters={clusterInfo?.clusters} routing={clusterInfo?.routing} health={health} loading={loading} onConnect={connect}/>}
     {loading && <div className="loading-line"/>}
     <ErrorToast error={error} onClose={() => setError(null)}/>
   </div>;
@@ -448,11 +590,20 @@ function JobTable({ jobs, onOpen }) {
 function formatEta(iso) {
   const t = new Date(iso);
   if (Number.isNaN(t.getTime())) return { abs: "—", rel: "" };
-  const abs = t.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-  const diff = (t.getTime() - Date.now()) / 1000;
+  const now = new Date();
+  const time = t.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  // 며칠 뒤 시작인데 시:분만 보여주면 오늘로 오해한다(세라프는 대기가 며칠 가는 게 흔하다).
+  // 날짜가 다르면 날짜를 함께 찍는다.
+  const sameDay = t.toDateString() === now.toDateString();
+  const abs = sameDay ? time : `${t.getMonth() + 1}/${t.getDate()} ${time}`;
+  const diff = (t.getTime() - now.getTime()) / 1000;
   if (diff <= 60) return { abs, rel: "곧" };
-  const h = Math.floor(diff / 3600), m = Math.floor((diff % 3600) / 60);
-  return { abs, rel: h > 0 ? `약 ${h}시간 ${m}분 뒤` : `약 ${m}분 뒤` };
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  // 며칠짜리 대기를 "약 91시간 뒤"로 쓰면 감이 안 온다.
+  const rel = d > 0 ? `약 ${d}일 ${h}시간 뒤` : h > 0 ? `약 ${h}시간 ${m}분 뒤` : `약 ${m}분 뒤`;
+  return { abs, rel };
 }
 
 function EtaBadge({ start, confidence }) {
@@ -481,7 +632,7 @@ function QueueTable({ pending }) {
       <span className="qname"><strong>{j.name || j.job_id}</strong><small>{j.is_mine ? "나" : j.user}</small></span>
       <span className="qgpu">{j.gpus}{j.high_perf_gpus ? " · 고성능" : ""}</span>
       <span className={`qreason ${j.blocked_by_quota ? "quota" : ""}`}>{j.reason_text || j.reason}</span>
-      <span className="qeta">{j.estimated_start ? formatEta(j.estimated_start).abs : "—"}{j.estimated_start && j.confidence !== "medium" ? " (추정)" : ""}</span>
+      <span className="qeta">{j.estimated_start ? formatEta(j.estimated_start).abs : "—"}{j.estimated_start && j.confidence !== "medium" && <em>추정</em>}</span>
     </div>)}
     {pending.length > shown.length && <div className="queue-more">외 {pending.length - shown.length}개 더 대기 중</div>}
   </div>;
