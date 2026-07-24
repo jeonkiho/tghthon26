@@ -67,10 +67,10 @@ class Snapshot:
         """내 계정에 맞는 기본 파티션.
 
         학부 파티션은 학과별로 갈리므로 계정에서 유도한다(ugrad_ce -> batch_ce_ugrad).
-        실서버에 그 파티션이 실제로 있으면 그것을, 없으면(예: mock) 신분별 config
-        기본값으로 떨어진다.
+        이름 규칙이 하나가 아니라(ugrad_advisor_x -> batch_ugrad_advisor_x) 후보를
+        만들어 서버의 실제 목록과 대조한다. 못 찾으면(예: mock) config 기본값.
         """
-        want = clusters.partition_from_account(self.account)
+        want = clusters.resolve_partition(self.account, 'batch', self.partitions)
         if self.partitions and want in self.partitions:
             return want
         if self.is_undergrad:
@@ -90,22 +90,27 @@ def _partition(snapshot, partition):
 def can_use_partition(snapshot, partition):
     """이 사용자가 이 파티션에 job 을 낼 수 있는가.
 
-    세라프 파티션은 계정으로 갈린다: *_ugrad 는 학부, *_grad 는 대학원, admin 은 root.
+    세라프 파티션은 계정으로 갈린다: 학부(ugrad) / 대학원(grad) / admin 은 root.
     사용자 계정을 모르면(mock 등) 막지 않고 True 로 둔다.
+
+    이름의 '끝'만 보면 안 된다 — batch_ugrad_advisor_x 처럼 ugrad 가 가운데 있는
+    파티션(지도교수 소속)이 있어서, 끝만 보던 예전 코드는 이걸 학부·대학원 어느
+    쪽도 아니라고 흘려보내 누구에게나 True 를 돌려줬다.
     """
     undergrad = snapshot.is_undergrad
     if 'admin' in partition:
         return False                    # 학생은 admin 파티션을 못 쓴다
     if undergrad is None:
         return True                     # 신분 불명이면 판단 보류
-    if partition.endswith('_ugrad'):
+    position = clusters.partition_position(partition)
+    if position == 'undergrad':
         if not undergrad:
             return False
-        # 학부생은 자기 계정(학과)의 파티션만 쓸 수 있다. 타 학과 *_ugrad 는 서버가 거절.
-        own = {clusters.partition_from_account(snapshot.account, 'batch'),
-               clusters.partition_from_account(snapshot.account, 'debug')}
+        # 학부생은 자기 계정의 파티션만 쓸 수 있다. 타 학과·타 지도교수 것은 서버가 거절.
+        own = {clusters.resolve_partition(snapshot.account, 'batch', snapshot.partitions),
+               clusters.resolve_partition(snapshot.account, 'debug', snapshot.partitions)}
         return partition in own
-    if partition.endswith('_grad'):
+    if position == 'grad':
         return not undergrad
     return True
 

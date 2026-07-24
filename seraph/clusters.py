@@ -111,6 +111,67 @@ def partition_from_account(account, kind='batch'):
     return f'{kind}_grad'
 
 
+def partition_candidates(account, kind='batch'):
+    """계정 -> 가능한 파티션 이름 후보(우선순위 순).
+
+    서버 네이밍이 한 가지가 아니다. 실서버에서 관측된 것:
+      ugrad_ce        -> batch_ce_ugrad          접미어를 앞으로 옮긴다
+      ugrad_eebme     -> batch_eebme_ugrad
+      grad_ce         -> batch_ce_grad
+      ugrad_advisor_x -> batch_ugrad_advisor_x   계정을 통째로 붙인다 (규칙이 다르다!)
+      ugrad / grad    -> batch_ugrad / batch_grad
+
+    지도교수(advisor) 소속이 생기면서 두 번째 규칙이 들어왔는데, 한 가지 규칙만
+    가정하면 없는 파티션 이름을 만들어낸다. 그래서 후보를 만들어 두고
+    resolve_partition() 이 서버에 실제로 있는 것을 고른다.
+    """
+    if not account:
+        return [f'{kind}_grad']
+    out = []
+    for prefix, tail in (('ugrad_', 'ugrad'), ('grad_', 'grad')):
+        if account.startswith(prefix):
+            out.append(f'{kind}_{account[len(prefix):]}_{tail}')
+            break
+    out.append(f'{kind}_{account}')
+    out.append(f'{kind}_ugrad' if account.startswith('ugrad') else f'{kind}_grad')
+    seen, uniq = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def resolve_partition(account, kind='batch', available=None):
+    """후보 중 서버에 실제로 있는 파티션. 목록을 모르면 첫 후보(추측)를 쓴다.
+
+    available 은 서버가 알려준 파티션 이름들(snapshot.partitions). 추측한 이름을
+    그대로 믿지 않고 실제 목록과 대조하는 게 요점이다.
+    """
+    candidates = partition_candidates(account, kind)
+    if available:
+        for name in candidates:
+            if name in available:
+                return name
+    return candidates[0]
+
+
+def partition_position(partition):
+    """이 파티션이 학부용인가 대학원용인가. 판단 못 하면 None.
+
+    끝만 보면 안 된다 — batch_ce_ugrad 는 끝이지만 batch_ugrad_advisor_x 는
+    가운데에 있다. 끝만 보던 코드는 advisor 파티션을 둘 다 아닌 것으로 흘려보내
+    "누구나 쓸 수 있다"고 답했다.
+    """
+    body = partition.split('_', 1)[1] if '_' in partition else partition
+    parts = body.split('_')
+    if 'ugrad' in parts:
+        return 'undergrad'
+    if 'grad' in parts:
+        return 'grad'
+    return None
+
+
 def major_from_account(account):
     """계정 이름에서 학과를 추정한다. 못 하면 None.
 
