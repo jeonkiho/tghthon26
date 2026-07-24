@@ -8,7 +8,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import pytest
 
 from seraph import config as config_module
-from seraph import notify, sbatch, services, tutorial
+from seraph import clusters, notify, sbatch, services, tutorial
 from seraph.connection import MockConnection
 from seraph.parsers import parse_partitions, parse_slurm_duration
 
@@ -119,11 +119,12 @@ def test_partition_from_account():
 
 
 class _FakeSnap:
-    """can_use_partition / _node_allowlist 는 account·is_undergrad·nodes·config 만 본다."""
-    def __init__(self, account, is_undergrad, node_names=()):
+    """can_use_partition / _node_allowlist 는 account·is_undergrad·nodes·partitions·config 만 본다."""
+    def __init__(self, account, is_undergrad, node_names=(), partitions=()):
         self.account = account
         self.is_undergrad = is_undergrad
         self.nodes = [type('N', (), {'name': n})() for n in node_names]
+        self.partitions = list(partitions)
         self.config = config_module.load(pathlib.Path('/no/such.yaml'))
 
 
@@ -376,3 +377,64 @@ def test_should_poll_respects_config_limit(snap):
     assert not services.should_poll(snap)
     snap.load = 1.0
     assert services.should_poll(snap)
+
+
+# --- 지도교수(advisor) 소속 파티션: 서버 네이밍이 학과 계정과 다르다 ---
+# 실서버 moana 관측: batch_ugrad_advisor_x (계정을 통째로), batch_ce_ugrad (접미어를 앞으로)
+
+def test_partition_candidates_covers_both_naming_rules():
+    cands = clusters.partition_candidates('ugrad_advisor_x', 'batch')
+    assert 'batch_ugrad_advisor_x' in cands, '실서버 이름이 후보에 없다'
+    assert 'batch_advisor_x_ugrad' in cands, '학과식 이름도 후보로 남긴다'
+
+
+def test_resolve_partition_picks_the_one_that_exists():
+    """추측한 이름을 그대로 쓰지 않고 서버의 실제 목록과 대조한다."""
+    real = ['debug_ce_ugrad', 'batch_ce_ugrad', 'debug_ugrad_advisor_x',
+            'batch_ugrad_advisor_x', 'admin']
+    assert clusters.resolve_partition('ugrad_advisor_x', 'batch', real) == 'batch_ugrad_advisor_x'
+    assert clusters.resolve_partition('ugrad_advisor_x', 'debug', real) == 'debug_ugrad_advisor_x'
+    assert clusters.resolve_partition('ugrad_ce', 'batch', real) == 'batch_ce_ugrad'
+    # 목록을 모르면 기존처럼 첫 후보(추측)
+    assert clusters.resolve_partition('ugrad_ce', 'batch', None) == 'batch_ce_ugrad'
+
+
+def test_partition_position_handles_ugrad_in_the_middle():
+    """batch_ugrad_advisor_x 는 _ugrad 로 끝나지 않는다. 끝만 보면 놓친다."""
+    assert clusters.partition_position('batch_ce_ugrad') == 'undergrad'
+    assert clusters.partition_position('batch_ugrad_advisor_x') == 'undergrad'
+    assert clusters.partition_position('debug_ugrad_advisor_x') == 'undergrad'
+    assert clusters.partition_position('batch_ce_grad') == 'grad'
+    assert clusters.partition_position('batch_grad') == 'grad'
+    assert clusters.partition_position('admin') is None
+
+
+# 실서버 moana 의 파티션 목록(전수 조회 결과)
+_MOANA_PARTS = ['admin', 'debug_eebme_ugrad', 'batch_eebme_ugrad',
+                'debug_eebme_grad', 'batch_eebme_grad', 'debug_ce_ugrad',
+                'batch_ce_ugrad', 'debug_ce_grad', 'batch_ce_grad',
+                'debug_ugrad_advisor_x', 'batch_ugrad_advisor_x']
+
+
+def test_ce_undergrad_cannot_use_another_advisor_partition():
+    """CE 학부생에게 지도교수 전용 파티션이 '사용 가능'으로 보이면 안 된다.
+
+    끝만 보던 예전 코드는 batch_ugrad_advisor_x 를 학부·대학원 어느 쪽도 아니라고
+    흘려보내 True 를 돌려줬다(실서버에서 실제로 그렇게 보였다).
+    """
+    ce = _FakeSnap('ugrad_ce', True, partitions=_MOANA_PARTS)
+    assert services.can_use_partition(ce, 'batch_ce_ugrad') is True
+    assert services.can_use_partition(ce, 'debug_ce_ugrad') is True
+    assert services.can_use_partition(ce, 'batch_ugrad_advisor_x') is False
+    assert services.can_use_partition(ce, 'debug_ugrad_advisor_x') is False
+    assert services.can_use_partition(ce, 'batch_ce_grad') is False
+    assert services.can_use_partition(ce, 'admin') is False
+
+
+def test_advisor_undergrad_gets_the_real_partition():
+    """지도교수 소속 학부생은 자기 파티션만. 이름 규칙이 학과 계정과 다르다."""
+    adv = _FakeSnap('ugrad_advisor_x', True, partitions=_MOANA_PARTS)
+    assert clusters.resolve_partition('ugrad_advisor_x', 'batch', _MOANA_PARTS) == 'batch_ugrad_advisor_x'
+    assert services.can_use_partition(adv, 'batch_ugrad_advisor_x') is True
+    assert services.can_use_partition(adv, 'debug_ugrad_advisor_x') is True
+    assert services.can_use_partition(adv, 'batch_ce_ugrad') is False
