@@ -30,11 +30,24 @@ async function api(path, options = {}) {
   } finally {
     clearTimeout(timer);
   }
-  const data = await response.json().catch(() => ({}));
+  let data = null;
+  let unparsable = false;
+  try { data = await response.json(); } catch { unparsable = true; }
   if (!response.ok) {
     const error = new Error(data?.error?.message || "요청을 처리하지 못했습니다.");
     error.code = data?.error?.code || "REQUEST_FAILED";
     error.retryable = Boolean(data?.error?.retryable);
+    throw error;
+  }
+  if (unparsable) {
+    // 예전에는 파싱 실패를 빈 객체로 삼켰다. 그러면 개발 서버 프록시가 끊겨
+    // index.html 이 200 으로 돌아올 때 "성공했는데 내용이 없는" 응답이 되고,
+    // 화면은 그걸 믿고 없는 필드를 읽다가 통째로 죽는다 — 흰 화면에 메시지도 없이.
+    const error = new Error(
+      "서버가 API 응답 대신 다른 것을 돌려줬습니다. 개발 서버가 백엔드에 연결되지 "
+      + "않았을 수 있습니다 — 백엔드가 떠 있는지 확인하고 새로고침해 주세요.");
+    error.code = "BAD_RESPONSE";
+    error.retryable = true;
     throw error;
   }
   return data;
@@ -230,70 +243,6 @@ function fmtBytes(n) {
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)}${u[i]}`;
 }
 
-// NAS 탐색기. 데이터 경로를 눈으로 보고 고르게 한다 — 예전에는 서버 경로를
-// 맨 입력창에 직접 타이핑해야 했고, 기본값조차 존재하지 않는 경로였다.
-function NasBrowser({ open, onClose, onPick, onUpload, uploading }) {
-  const [path, setPath] = useState(null);
-  const [data, setData] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
-
-  const load = useCallback(async (target) => {
-    setBusy(true); setErr(null);
-    try {
-      const q = target ? `?path=${encodeURIComponent(target)}` : "";
-      const d = await api(`/api/v1/remote/ls${q}`);
-      setData(d); setPath(d.path);
-    } catch (e) { setErr(e.message); }
-    finally { setBusy(false); }
-  }, []);
-
-  useEffect(() => { if (open) load(path); }, [open]);   // 열 때만 로드
-  if (!open) return null;
-
-  const entries = data?.entries || [];
-  return <div className="connect-overlay" onClick={onClose}>
-    <div className="nas-modal" onClick={(e) => e.stopPropagation()}>
-      <div className="nas-head">
-        <div>
-          <p className="eyebrow">NAS BROWSER</p>
-          <h2>데이터 파일 선택</h2>
-        </div>
-        <button className="icon-button" onClick={onClose} aria-label="닫기"><Icon name="close" size={18}/></button>
-      </div>
-
-      <div className="nas-bar">
-        <button className="secondary compact" disabled={!data?.parent || busy} onClick={() => load(data.parent)}>상위</button>
-        <code className="nas-path">{path || "…"}</code>
-        <button className="secondary compact" disabled={busy} onClick={() => load(data?.data_root)}>내 폴더</button>
-      </div>
-
-      {err && <p className="nas-err">{err}</p>}
-
-      <div className="nas-list">
-        {busy && <div className="empty-mini"><span>불러오는 중…</span></div>}
-        {!busy && !entries.length && !err && <div className="empty-mini"><Icon name="folder" size={20}/><span>이 폴더는 비어 있습니다.</span></div>}
-        {!busy && entries.map((e) => <button
-          key={e.path}
-          className={`nas-row ${e.is_dir ? "dir" : e.is_archive ? "ok" : "dim"}`}
-          onClick={() => e.is_dir ? load(e.path) : e.is_archive && onPick(e.path)}
-          disabled={!e.is_dir && !e.is_archive}
-          title={e.is_dir ? "" : e.is_archive ? "이 파일을 데이터로 사용" : "압축 파일(.tar/.tar.gz/.tgz/.zip)만 사용할 수 있습니다"}>
-          <Icon name={e.is_dir ? "folder" : "server"} size={15}/>
-          <span className="nas-name">{e.name}</span>
-          <span className="nas-size">{e.is_dir ? "폴더" : fmtBytes(e.size)}</span>
-        </button>)}
-      </div>
-
-      <div className="nas-foot">
-        <span>압축 파일(.tar · .tar.gz · .tgz · .zip)만 고를 수 있습니다 — NAS IOPS 보호</span>
-        <button className="primary compact" onClick={onUpload} disabled={uploading}>
-          <Icon name="plus" size={15}/> {uploading ? "올리는 중…" : "내 PC에서 올리기"}
-        </button>
-      </div>
-    </div>
-  </div>;
-}
 
 // 빌드는 20분까지 걸린다. 새로고침하거나 실수로 탭을 닫아도 진행 상황을 다시
 // 찾을 수 있어야 한다 — 서버에서는 계속 돌고 있는데 화면만 잊어버리면 곤란하다.
@@ -565,6 +514,234 @@ function AlertBanner({ alerts, onDismiss }) {
   </div>)}</div>;
 }
 
+// --- 파일 탐색기 -------------------------------------------------------------
+// 예전 것은 "탐색기"가 아니라 한 폴더만 보여주는 파일 고르기 창이었다. 폴더 구조가
+// 어디에도 안 보여서, 내 결과물이 서버 어디에 어떻게 쌓이는지 알 수 없었다.
+// 왼쪽 트리로 구조를, 오른쪽 목록으로 내용을 본다.
+
+const FILE_SORTS = {
+  name: { label: "이름", get: (e) => e.name.toLowerCase() },
+  size: { label: "크기", get: (e) => e.size ?? -1 },
+  mtime: { label: "수정한 날짜", get: (e) => e.mtime ?? 0 },
+};
+
+function fmtWhen(seconds) {
+  if (!seconds) return "—";
+  return new Date(seconds * 1000).toLocaleString("ko-KR",
+    { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function fileKind(entry) {
+  if (entry.is_dir) return entry.is_link ? "폴더 링크" : "폴더";
+  if (entry.is_archive) return "압축 파일";
+  const dot = entry.name.lastIndexOf(".");
+  return dot > 0 ? `${entry.name.slice(dot + 1).toUpperCase()} 파일` : "파일";
+}
+
+// 트리 한 칸. 펼칠 때만 그 폴더를 물어본다 — 미리 다 읽으면 데이터셋 폴더 하나가
+// 수만 개 항목을 끌고 온다. SFTP 는 직렬화돼 있어서 더더욱 그렇다.
+// kids 를 children 이라고 부르지 않는다. React 의 예약 prop 을 가려서, 나중에 이
+// 컴포넌트에 자식을 중첩하는 순간 조용히 덮어써진다.
+function TreeNode({ node, depth, cwd, expanded, kidsByPath, onToggle, onOpen }) {
+  const isOpen = expanded.has(node.path);
+  const kids = kidsByPath[node.path];
+  return <>
+    <div className={`tree-row ${cwd === node.path ? "on" : ""}`} style={{ paddingLeft: 6 + depth * 14 }}>
+      <button className="tree-caret" onClick={() => onToggle(node.path)}
+        aria-label={isOpen ? "접기" : "펼치기"}>
+        <span className={isOpen ? "open" : ""}>▸</span>
+      </button>
+      <button className="tree-label" onClick={() => onOpen(node.path)} title={node.path}>
+        <Icon name="folder" size={14}/><span>{node.name}</span>
+      </button>
+    </div>
+    {isOpen && (kids === undefined
+      ? <div className="tree-loading" style={{ paddingLeft: 26 + depth * 14 }}>불러오는 중…</div>
+      : kids.length === 0
+        ? <div className="tree-loading" style={{ paddingLeft: 26 + depth * 14 }}>하위 폴더 없음</div>
+        : kids.map((kid) => <TreeNode key={kid.path} node={kid} depth={depth + 1} cwd={cwd}
+            expanded={expanded} kidsByPath={kidsByPath} onToggle={onToggle} onOpen={onOpen}/>))}
+  </>;
+}
+
+function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
+  const picker = mode === "picker";
+  const [roots, setRoots] = useState([]);
+  const [cwd, setCwd] = useState(null);
+  const [listing, setListing] = useState(null);
+  const [treeKids, setTreeKids] = useState({});
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [selected, setSelected] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [showHidden, setShowHidden] = useState(false);
+  const [sort, setSort] = useState({ key: "name", asc: true });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const ls = useCallback(async (path, extra = "") => {
+    const query = new URLSearchParams({ show_hidden: String(showHidden) });
+    if (path) query.set("path", path);
+    return api(`/api/v1/remote/ls?${query}${extra}`);
+  }, [showHidden]);
+
+  const open = useCallback(async (path) => {
+    setBusy(true); setErr(null); setSelected(null); setPreview(null);
+    try {
+      const data = await ls(path);
+      setListing(data); setCwd(data.path);
+      if (!roots.length) {
+        // 루트는 서버가 알려준 경로로만 만든다. 화면이 /data/<사용자> 를 직접
+        // 조립하면 사용자명이 바뀌는 순간 조용히 틀린 곳을 가리킨다.
+        setRoots([
+          { name: "내 폴더", path: data.data_root },
+          { name: "내 데이터셋", path: data.datasets_root },
+          { name: "공용 데이터셋", path: "/data/datasets" },
+          { name: "홈", path: data.home },
+        ].filter((r) => r.path));
+      }
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }, [ls, roots.length]);
+
+  useEffect(() => {
+    // 트리 캐시도 함께 버린다. 캐시는 이전 showHidden 으로 읽은 것이라, 안 비우면
+    // 숨김 폴더가 목록에는 나타나는데 트리에는 없는 상태가 된다.
+    setTreeKids({});
+    open(cwd);
+  }, [showHidden]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggle = useCallback(async (path) => {
+    const next = new Set(expanded);
+    if (next.has(path)) { next.delete(path); setExpanded(next); return; }
+    next.add(path); setExpanded(next);
+    if (treeKids[path] !== undefined) return;               // 이미 읽은 건 다시 안 묻는다
+    try {
+      const data = await ls(path, "&dirs_only=true");
+      setTreeKids((old) => ({ ...old, [path]: data.entries || [] }));
+    } catch { setTreeKids((old) => ({ ...old, [path]: [] })); }
+  }, [expanded, treeKids, ls]);
+
+  const look = useCallback(async (entry) => {
+    setSelected(entry);
+    setPreview(null);
+    if (entry.is_dir) return;
+    try { setPreview(await api(`/api/v1/remote/file?path=${encodeURIComponent(entry.path)}`)); }
+    catch (e) { setPreview({ error: e.message }); }
+  }, []);
+
+  const entries = useMemo(() => {
+    const list = [...(listing?.entries || [])];
+    const get = FILE_SORTS[sort.key].get;
+    list.sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;   // 폴더가 항상 위
+      const x = get(a), y = get(b);
+      return (x < y ? -1 : x > y ? 1 : 0) * (sort.asc ? 1 : -1);
+    });
+    return list;
+  }, [listing, sort]);
+
+  const crumbs = useMemo(() => {
+    if (!cwd) return [];
+    const parts = cwd.split("/").filter(Boolean);
+    return parts.map((name, i) => ({ name, path: "/" + parts.slice(0, i + 1).join("/") }));
+  }, [cwd]);
+
+  const pickable = (entry) => !entry.is_dir && entry.is_archive;
+
+  return <div className={`explorer ${picker ? "in-picker" : ""}`}>
+    <div className="exp-bar">
+      <button className="secondary compact" disabled={!listing?.parent || busy}
+        onClick={() => open(listing.parent)}>상위</button>
+      <nav className="exp-crumbs" aria-label="경로">
+        <button onClick={() => open("/")}>/</button>
+        {crumbs.map((crumb) => <button key={crumb.path} onClick={() => open(crumb.path)}>{crumb.name}</button>)}
+      </nav>
+      <label className="exp-hidden">
+        <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)}/>
+        숨김 항목
+      </label>
+      <button className="icon-button" onClick={() => open(cwd)} disabled={busy} title="새로고침">
+        <Icon name="refresh" size={16}/>
+      </button>
+    </div>
+
+    {err && <p className="nas-err">{err}</p>}
+
+    <div className="exp-body">
+      <aside className="exp-tree">
+        {roots.map((root) => <TreeNode key={root.path} node={root} depth={0} cwd={cwd}
+          expanded={expanded} kidsByPath={treeKids} onToggle={toggle} onOpen={open}/>)}
+      </aside>
+
+      <div className="exp-main">
+        <div className="exp-head">
+          {Object.entries(FILE_SORTS).map(([key, spec]) => <button key={key}
+            className={sort.key === key ? "on" : ""}
+            onClick={() => setSort((old) => ({ key, asc: old.key === key ? !old.asc : true }))}>
+            {spec.label}{sort.key === key ? (sort.asc ? " ▲" : " ▼") : ""}
+          </button>)}
+          <span className="exp-kind">종류</span>
+        </div>
+        <div className="exp-list">
+          {busy && <div className="empty-mini"><span>불러오는 중…</span></div>}
+          {!busy && !entries.length && !err && <div className="empty-mini">
+            <Icon name="folder" size={20}/><span>이 폴더는 비어 있습니다.</span></div>}
+          {!busy && entries.map((entry) => <button key={entry.path}
+            className={`exp-row ${selected?.path === entry.path ? "on" : ""} ${entry.hidden ? "dim" : ""}`}
+            onClick={() => entry.is_dir ? open(entry.path) : look(entry)}
+            onDoubleClick={() => picker && pickable(entry) && onPick(entry.path)}>
+            <span className="exp-name">
+              <Icon name={entry.is_dir ? "folder" : entry.is_archive ? "box" : "server"} size={15}/>
+              {entry.name}{entry.is_link ? " ↗" : ""}
+            </span>
+            <span>{entry.is_dir ? "—" : fmtBytes(entry.size)}</span>
+            <span>{fmtWhen(entry.mtime)}</span>
+            <span className="exp-kind">{fileKind(entry)}</span>
+          </button>)}
+        </div>
+      </div>
+    </div>
+
+    {selected && !selected.is_dir && <div className="exp-preview">
+      <div className="exp-preview-head">
+        <div><strong>{selected.name}</strong><small>{selected.path}</small></div>
+        {picker && <button className="primary compact" disabled={!pickable(selected)}
+          onClick={() => onPick(selected.path)}
+          title={pickable(selected) ? "" : "압축 파일만 데이터로 쓸 수 있습니다"}>이 파일 사용</button>}
+      </div>
+      {preview === null ? <p className="muted">여는 중…</p>
+        : preview.error ? <p className="nas-err">{preview.error}</p>
+        : preview.binary ? <p className="muted">텍스트 파일이 아니어서 내용을 보여줄 수 없습니다. ({fmtBytes(preview.size)})</p>
+        : <>
+            <pre className="logs">{preview.text || "(빈 파일)"}</pre>
+            {preview.truncated && <p className="muted">앞부분만 보여줍니다 — 전체 {fmtBytes(preview.size)}</p>}
+          </>}
+    </div>}
+
+    {picker && <div className="nas-foot">
+      <span>압축 파일(.tar · .tar.gz · .tgz · .zip)만 고를 수 있습니다 — NAS IOPS 보호</span>
+      <button className="primary compact" onClick={onUpload} disabled={uploading}>
+        <Icon name="plus" size={15}/> {uploading ? "올리는 중…" : "내 PC에서 올리기"}
+      </button>
+    </div>}
+  </div>;
+}
+
+// 새 작업 폼에서 데이터를 고를 때 쓰는 모달. 알맹이는 파일 화면과 같은 탐색기다 —
+// 고르는 창과 보는 창이 서로 다르게 동작하면 한쪽에서 배운 게 다른 쪽에서 안 통한다.
+function NasBrowser({ open, onClose, onPick, onUpload, uploading }) {
+  if (!open) return null;
+  return <div className="connect-overlay" onClick={onClose}>
+    <div className="nas-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="nas-head">
+        <div><p className="eyebrow">NAS BROWSER</p><h2>데이터 파일 선택</h2></div>
+        <button className="icon-button" onClick={onClose} aria-label="닫기"><Icon name="close" size={18}/></button>
+      </div>
+      <FileExplorer mode="picker" onPick={onPick} onUpload={onUpload} uploading={uploading}/>
+    </div>
+  </div>;
+}
+
 function ErrorToast({ error, onClose }) {
   if (!error) return null;
   return <div className="toast" role="alert">
@@ -586,6 +763,7 @@ const PAGE_TITLES = {
   dashboard: ["CLUSTER OVERVIEW", "클러스터 대시보드"],
   new: ["JOB WIZARD", "새 GPU 작업"],
   jobs: ["JOB MONITOR", "내 작업"],
+  files: ["FILE BROWSER", "서버 파일"],
   envs: ["ENVIRONMENTS", "파이썬 환경"],
   history: ["JOB HISTORY", "완료 작업 이력"],
   tutorial: ["GUIDE", "세라프 사용법"],
@@ -896,7 +1074,7 @@ export default function App() {
   });
 
   const nav = [
-    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["envs", "box", "환경"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
+    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["files", "folder", "파일"], ["envs", "box", "환경"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
   ];
   // 사이드바 배지는 "지금 신경 쓸 게 있나"를 뜻한다. 전체 개수를 띄우면 끝난 작업이
   // 남아 있는 한 영원히 사라지지 않아서, 배지가 아무 의미도 갖지 못한다.
@@ -961,7 +1139,7 @@ export default function App() {
             <QueueTable pending={queue?.pending || []}/>
           </article>
         </div>
-        {clusterInfo && <article className="panel cluster-panel">
+        {clusterInfo?.clusters && <article className="panel cluster-panel">
           <div className="panel-head"><div><p className="eyebrow">CLUSTERS</p><h2>클러스터 안내</h2></div><span>{clusterInfo.note}</span></div>
           {me?.on_primary === false && me?.cluster_notice && <div className="cluster-notice"><Icon name="warn" size={16}/><p>{me.cluster_notice}</p></div>}
           {/* '실시간'은 정적 표가 아니라 지금 붙어 있는 클러스터가 정한다(me.connected_cluster). */}
@@ -1024,6 +1202,16 @@ export default function App() {
       {tab === "jobs" && <section className="page jobs-page">
         <article className="panel jobs-panel"><div className="panel-head"><div><p className="eyebrow">SLURM JOBS</p><h2>작업별 실행 상태</h2></div><button className="secondary compact" onClick={loadJobs}><Icon name="refresh" size={16}/> 새로고침</button></div><JobTable jobs={jobs} onOpen={openJob}/></article>
         {selected && <DrawerShell onClose={() => setSelected(null)} label="작업 상세"><div className="drawer-head"><div><p className="eyebrow">JOB DETAIL</p><h2>{selected.job.job_name}</h2></div><button onClick={() => setSelected(null)}><Icon name="close"/></button></div><div className="drawer-status"><StatusPill status={selected.job.status}/><span>Slurm #{selected.job.slurm_job_id || "미제출"}</span></div><dl className="detail-grid"><div><dt>파티션</dt><dd>{selected.job.partition}</dd></div><div><dt>노드</dt><dd>{selected.job.node || "자동"}</dd></div><div><dt>GPU</dt><dd>{selected.job.gpus}개</dd></div><div><dt>시간 제한</dt><dd>{selected.job.time_limit}</dd></div><div className="wide"><dt>데이터</dt><dd>{selected.job.dataset_path}</dd></div><div className="wide"><dt>결과</dt><dd>{selected.job.output_path}</dd></div></dl><div className="log-tabs"><span><Icon name="terminal" size={17}/> stdout · 수동 갱신</span><div><button onClick={() => refreshJobLogs(selected.job.local_job_id)}><Icon name="refresh" size={15}/> 로그 갱신</button><button onClick={() => navigator.clipboard.writeText(logs?.stdout || "")}><Icon name="copy" size={15}/> 복사</button></div></div><pre className="logs">{logs?.stdout || "아직 출력 로그가 없습니다."}{logs?.stderr ? `\n\n[stderr]\n${logs.stderr}` : ""}</pre>{ACTIVE.has(selected.job.status) && selected.job.slurm_job_id && <button className="danger-button" onClick={() => cancel(selected.job.local_job_id)}>작업 취소</button>}{!ACTIVE.has(selected.job.status) && <button className="secondary full drawer-delete" onClick={() => removeJob(selected.job.local_job_id)}><Icon name="close" size={15}/> 이 작업 기록 삭제</button>}</DrawerShell>}
+      </section>}
+
+      {tab === "files" && <section className="page files-page">
+        <article className="panel files-panel">
+          <div className="panel-head">
+            <div><p className="eyebrow">SERAPH STORAGE</p><h2>서버 파일 탐색기</h2></div>
+            <span>읽기 전용 · 서버가 권한을 강제합니다</span>
+          </div>
+          <FileExplorer mode="page"/>
+        </article>
       </section>}
 
       {tab === "envs" && <EnvsPage report={report} onEnvsChanged={setEnvOptions}/>}
