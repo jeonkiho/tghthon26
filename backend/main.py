@@ -17,12 +17,15 @@ from seraph import clusters, history, placement, sbatch, services, slack, tutori
 
 from .cache import SnapshotCache
 from .dependencies import ConnectionManager
+from .env_service import EnvService
 from .errors import ApiError, install_error_handlers
 from .job_service import JobService
 from .local_picker import select_code_path, select_dataset_archive
 from .occupancy_history import OccupancyHistory
+from .watcher import Watcher
 from .schemas import (
     ConnectRequest,
+    EnvSpec,
     JobSpec,
     PreviewRequest,
     RecommendationRequest,
@@ -31,6 +34,8 @@ from .schemas import (
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LOCAL_JOB_ID = Annotated[str, Path(pattern=r"^[a-f0-9]{8,32}$")]
+BUILD_ID = Annotated[str, Path(pattern=r"^[a-f0-9]{12}$")]
+ENV_NAME = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +49,9 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     manager = ConnectionManager(cfg)
     cache = SnapshotCache(lambda: manager, ttl_seconds=cfg.poll_interval)
     jobs = JobService(manager)
+    envs = EnvService(manager)
     occupancy = OccupancyHistory()
+    watcher = Watcher(manager, jobs, envs)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -55,7 +62,11 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
                 await to_thread.run_sync(manager.connect)
             except ApiError:
                 log.warning("SERAPH mock initial connection failed")
+            else:
+                await to_thread.run_sync(watcher.resync)
+        watcher.start()
         yield
+        watcher.stop()
         await to_thread.run_sync(manager.close)
 
     app = FastAPI(
@@ -69,13 +80,15 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     app.state.manager = manager
     app.state.cache = cache
     app.state.jobs = jobs
+    app.state.envs = envs
     app.state.occupancy = occupancy
+    app.state.watcher = watcher
     install_error_handlers(app)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
     )
 
@@ -123,6 +136,9 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
                 "입력한 사용자명과 SERAPH가 확인한 로그인 계정이 다릅니다.",
                 status_code=422,
             )
+        # 백엔드를 재시작하면 감시 목록이 비어 있다. 로그인 직후 서버에 다시 물어
+        # 진행 중인 작업을 되찾지 않으면, 재시작 전에 낸 작업의 완료를 놓친다.
+        await to_thread.run_sync(watcher.resync)
         return {"ok": True, "mode": manager.mode, "me": identity}
 
     @app.post("/api/v1/session/disconnect")
@@ -180,6 +196,50 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
         remote = jobs.remote
         info = await to_thread.run_sync(lambda: remote.upload_dataset(chosen))
         return {"ok": True, "selected": True, "dataset": info}
+
+    # --- 알림 ---------------------------------------------------------------
+    # 몇 시간짜리 학습을 화면 보면서 기다리게 하면 `watch squeue` 와 다를 게 없다.
+    # 이 호출은 새 이벤트를 가져가는 동시에 "브라우저가 살아 있다"는 신호가 된다 —
+    # 브라우저가 있으면 화면이, 없으면 백엔드가 OS 알림을 띄운다(둘 다는 아니다).
+
+    @app.get("/api/v1/events")
+    async def events(
+        since: Annotated[int | None, Query(ge=0)] = None,
+        session: Annotated[str | None, Query(pattern=r"^[a-f0-9]{12}$")] = None,
+        can_notify: bool = False,
+    ) -> dict[str, Any]:
+        # can_notify 가 거짓이면 화면은 알림 권한이 없다는 뜻이다. 그때도 백엔드가
+        # 조용히 있으면 브라우저를 열어둔 채로 아무 소식도 못 받는다.
+        return {"ok": True, **watcher.events(since, session, can_notify=can_notify)}
+
+    # --- 개인 환경 만들기 ---------------------------------------------------
+    # 공용 설치는 읽기 전용이라 원하는 torch 버전을 넣을 수 없었고, 그 순간
+    # 학생은 이 도구를 닫고 터미널을 열었다. 마지막 남은 터미널 의존이다.
+
+    @app.get("/api/v1/envs/tools")
+    async def env_tools() -> dict[str, Any]:
+        return {"ok": True, **await to_thread.run_sync(envs.tools)}
+
+    @app.get("/api/v1/envs/builds/{build_id}")
+    async def env_build(build_id: BUILD_ID) -> dict[str, Any]:
+        return {"ok": True, **await to_thread.run_sync(lambda: envs.build_status(build_id))}
+
+    @app.get("/api/v1/envs")
+    async def list_envs() -> dict[str, Any]:
+        listed = await to_thread.run_sync(envs.list_envs)
+        # 진행 중인 빌드를 같이 준다. 화면이 자기가 시작하지 않은 빌드(다른 브라우저,
+        # 저장소 삭제, 백엔드 재시작)도 이어서 볼 수 있어야 한다.
+        return {"ok": True, **listed, "running_builds": watcher.running_builds()}
+
+    @app.post("/api/v1/envs")
+    async def create_env(body: EnvSpec) -> dict[str, Any]:
+        result = await to_thread.run_sync(lambda: envs.create(body))
+        watcher.watch_build(result["build"]["build_id"], result["build"]["name"])
+        return {"ok": True, **result}
+
+    @app.delete("/api/v1/envs/{name}")
+    async def delete_env(name: ENV_NAME) -> dict[str, Any]:
+        return {"ok": True, **await to_thread.run_sync(lambda: envs.delete(name))}
 
     @app.get("/api/v1/cluster/status")
     async def cluster_status(partition: str | None = None) -> dict[str, Any]:
@@ -331,7 +391,7 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     @app.post("/api/v1/jobs/{local_job_id}/submit")
     async def submit_job(local_job_id: LOCAL_JOB_ID, body: SubmitRequest) -> dict[str, Any]:
         snapshot, _ = await cached_snapshot()
-        return await to_thread.run_sync(
+        result = await to_thread.run_sync(
             lambda: jobs.submit(
                 local_job_id,
                 request_id=body.request_id,
@@ -339,6 +399,9 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
                 snapshot=snapshot,
             )
         )
+        job = result.get("job") or {}
+        watcher.watch_job(local_job_id, job.get("job_name") or "작업")
+        return result
 
     @app.delete("/api/v1/jobs/{local_job_id}")
     async def delete_job(local_job_id: LOCAL_JOB_ID) -> dict[str, Any]:
