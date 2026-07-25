@@ -459,3 +459,52 @@ def test_conda_discovery_reports_installs_and_envs():
         for inst in installs:
             assert {"root", "conda_sh", "is_personal", "envs"} <= set(inst)
             assert inst["conda_sh"].endswith("/etc/profile.d/conda.sh")
+
+
+# --- 작업 기록 삭제 ------------------------------------------------------------
+# 끝난 작업이 계속 쌓이면 목록이 못 쓰게 된다. 다만 도는 작업을 지우면 Slurm 에는
+# job 이 남고 우리만 추적을 잃으므로, 그건 취소가 먼저다.
+
+def test_delete_removes_job_from_list(tmp_path):
+    code = tmp_path / "project"
+    code.mkdir()
+    (code / "train.py").write_text("print('ok')\n", encoding="utf-8")
+    app = create_app()
+    with TestClient(app) as client:
+        prepared = client.post("/api/v1/jobs/prepare", json=_job_payload(code))
+        assert prepared.status_code == 200, prepared.text
+        local_id = prepared.json()["job"]["local_job_id"]
+        assert any(j["local_job_id"] == local_id for j in client.get("/api/v1/jobs").json()["jobs"])
+
+        removed = client.request("DELETE", f"/api/v1/jobs/{local_id}")
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["deleted"] == local_id
+
+        remaining = client.get("/api/v1/jobs").json()["jobs"]
+        assert all(j["local_job_id"] != local_id for j in remaining)
+        # 지운 작업은 상세 조회도 404 여야 한다.
+        assert client.get(f"/api/v1/jobs/{local_id}").status_code == 404
+
+
+def test_delete_refuses_while_job_is_active(tmp_path):
+    code = tmp_path / "project"
+    code.mkdir()
+    (code / "train.py").write_text("print('ok')\n", encoding="utf-8")
+    app = create_app()
+    with TestClient(app) as client:
+        prepared = client.post("/api/v1/jobs/prepare", json=_job_payload(code)).json()
+        local_id = prepared["job"]["local_job_id"]
+        # 도구는 srun 사전 점검을 통과해야만 제출을 받는다(튜토리얼 절차).
+        assert client.post(f"/api/v1/jobs/{local_id}/preflight").status_code == 200
+        submitted = client.post(
+            f"/api/v1/jobs/{local_id}/submit",
+            json={"request_id": "req-delete-guard", "confirmed": True},
+        )
+        assert submitted.status_code == 200, submitted.text
+
+        # 방금 제출한 job 은 아직 돈다 -> 삭제 거부
+        blocked = client.request("DELETE", f"/api/v1/jobs/{local_id}")
+        assert blocked.status_code == 409
+        assert blocked.json()["error"]["code"] == "JOB_STILL_ACTIVE"
+        # 목록에는 그대로 남아 있어야 한다
+        assert any(j["local_job_id"] == local_id for j in client.get("/api/v1/jobs").json()["jobs"])

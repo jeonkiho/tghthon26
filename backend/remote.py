@@ -172,6 +172,13 @@ class MockRemote:
         self.upload_file(str(source), target)
         return {"path": target, "name": source.name, "size": source.stat().st_size}
 
+    def delete_job_dir(self, path: str) -> None:
+        root = posixpath.normpath(self.jobs_root)
+        clean = posixpath.normpath(path)
+        if clean == root or not clean.startswith(root + "/"):
+            raise ApiError("REMOTE_PATH_NOT_ALLOWED", "작업 폴더만 삭제할 수 있습니다.", 403)
+        shutil.rmtree(self._local(clean), ignore_errors=True)
+
     def find_conda(self) -> dict[str, Any]:
         # mock 은 개인 설치 하나가 있는 것으로 흉내 낸다.
         return {"installs": [{
@@ -545,6 +552,19 @@ class SSHRemote:
         args.extend(["/usr/bin/bash", "preflight.sh"])
         command = f"cd {shlex.quote(clean)} && " + " ".join(shlex.quote(item) for item in args)
         return self.connection.run_command(command, label="srun 사전 점검", timeout=360)
+
+    def delete_job_dir(self, path: str) -> None:
+        """작업 폴더 하나를 지운다(메타데이터·업로드한 코드·로그).
+
+        삭제는 데이터셋 폴더까지 허용하는 _guard_job_path 를 쓰지 않는다. 실수로
+        데이터를 날리지 않게 작업 폴더 아래로만 막고, 작업 루트 자체도 거부한다.
+        """
+        root = posixpath.normpath(self.jobs_root)
+        clean = self._guard_write(path, [root], "작업 폴더만 삭제할 수 있습니다.")
+        if clean == root:
+            raise ApiError("REMOTE_PATH_NOT_ALLOWED", "작업 폴더 전체는 지울 수 없습니다.", 403)
+        self.connection.run_command(
+            f"rm -rf -- {shlex.quote(clean)}", label="작업 삭제", timeout=30)
 
     def job_state(self, job_id: str) -> dict[str, Any] | None:
         if not _JOB_ID.fullmatch(job_id):
