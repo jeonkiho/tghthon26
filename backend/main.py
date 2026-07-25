@@ -22,6 +22,7 @@ from .errors import ApiError, install_error_handlers
 from .job_service import JobService
 from .local_picker import select_code_path, select_dataset_archive
 from .occupancy_history import OccupancyHistory
+from .remote import PREVIEW_MAX_BYTES
 from .watcher import Watcher
 from .schemas import (
     ConnectRequest,
@@ -177,10 +178,26 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     # 데이터 경로를 눈 감고 타이핑하게 만들면 "터미널 없이"가 거짓말이 된다.
 
     @app.get("/api/v1/remote/ls")
-    async def remote_ls(path: str | None = None) -> dict[str, Any]:
+    async def remote_ls(
+        path: str | None = None,
+        show_hidden: bool = False,
+        dirs_only: bool = False,
+    ) -> dict[str, Any]:
         remote = jobs.remote
         target = path or remote.data_root
-        return {"ok": True, **await to_thread.run_sync(lambda: remote.list_entries(target))}
+        return {"ok": True, **await to_thread.run_sync(
+            lambda: remote.list_entries(target, show_hidden=show_hidden, dirs_only=dirs_only))}
+
+    @app.get("/api/v1/remote/file")
+    async def remote_file(
+        path: str,
+        max_bytes: Annotated[int, Query(ge=1024, le=PREVIEW_MAX_BYTES)] = PREVIEW_MAX_BYTES,
+    ) -> dict[str, Any]:
+        # 결과 파일 한 줄 보려고 터미널을 여는 일을 없앤다. 목록과 같은 규칙이다 —
+        # 서버가 권한을 강제하고, 못 읽는 곳은 그냥 실패한다.
+        remote = jobs.remote
+        return {"ok": True, **await to_thread.run_sync(
+            lambda: remote.preview_file(path, max_bytes=max_bytes))}
 
     @app.get("/api/v1/remote/conda")
     async def remote_conda() -> dict[str, Any]:

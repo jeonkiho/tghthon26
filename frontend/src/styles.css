@@ -322,3 +322,64 @@ button.hrow:hover{background:#f8fafc}
 .alert-card strong{display:block;font-size:10px;color:#253047}
 .alert-card p{font-size:9px;line-height:1.55;color:#68758a;margin:4px 0 0}
 .alert-card button{border:0;background:transparent;color:#a3adbc;padding:0}
+
+/* --- 파일 탐색기 -----------------------------------------------------------
+   왼쪽 트리로 구조, 오른쪽 목록으로 내용. 예전 것은 한 폴더만 보여주는 고르기
+   창이라 "내 결과물이 어디에 쌓이는지"를 알 수 없었다. */
+.files-panel{padding:21px 23px 0}
+.explorer{display:flex;flex-direction:column;min-height:0}
+.exp-bar{display:flex;align-items:center;gap:9px;padding:14px 0 12px;border-bottom:1px solid var(--line)}
+.exp-crumbs{flex:1;min-width:0;display:flex;align-items:center;gap:2px;overflow-x:auto;background:#f4f6f9;border-radius:6px;padding:5px 7px}
+.exp-crumbs button{border:0;background:transparent;color:#5d6a7e;font-size:10px;white-space:nowrap;padding:3px 4px;border-radius:4px}
+.exp-crumbs button:hover{background:#e5eaf1;color:#253047}
+.exp-crumbs button+button::before{content:"/";color:#b3bcc9;margin-right:5px}
+.exp-hidden{display:flex;align-items:center;gap:6px;font-size:9px;color:#77839a;white-space:nowrap}
+.exp-hidden input{accent-color:#22b98e}
+.exp-body{display:grid;grid-template-columns:236px 1fr;gap:0;min-height:390px}
+.exp-tree{border-right:1px solid var(--line);padding:10px 8px 10px 0;overflow:auto;max-height:460px}
+.tree-row{display:flex;align-items:center;gap:2px;border-radius:6px}
+.tree-row.on{background:#eaf6f2}
+.tree-row:hover{background:#f4f7fb}
+.tree-row.on:hover{background:#e2f2ec}
+.tree-caret{border:0;background:transparent;color:#9aa5b6;width:16px;padding:0;font-size:9px;line-height:1}
+.tree-caret span{display:inline-block;transition:transform .15s}
+.tree-caret span.open{transform:rotate(90deg)}
+.tree-label{flex:1;min-width:0;display:flex;align-items:center;gap:6px;border:0;background:transparent;text-align:left;padding:6px 4px;font-size:10px;color:#48546a}
+.tree-label span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-label svg{flex:none;color:#8fa0b8}
+.tree-loading{font-size:8px;color:#a3adbc;padding:3px 0}
+.exp-main{display:flex;flex-direction:column;min-width:0}
+.exp-head,.exp-row{display:grid;grid-template-columns:minmax(220px,2.2fr) 90px 130px 110px;gap:12px;align-items:center}
+.exp-head{padding:9px 12px;border-bottom:1px solid #edf0f5;font-size:8px;text-transform:uppercase;letter-spacing:.7px;color:#a0a9b9}
+.exp-head button{border:0;background:transparent;color:inherit;font:inherit;text-align:left;padding:0}
+.exp-head button:hover,.exp-head button.on{color:#2a8d75}
+.exp-list{flex:1;overflow-y:auto;max-height:420px;padding:4px 0}
+.exp-row{width:100%;border:0;background:transparent;text-align:left;padding:8px 12px;font-size:10px;color:#66748a;min-height:34px}
+.exp-row:hover{background:#f8fafc}
+.exp-row.on{background:#eaf6f2}
+.exp-row.dim{color:#a3adbc}
+.exp-name{display:flex;align-items:center;gap:8px;min-width:0;color:#253047;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp-row.dim .exp-name{color:#98a2b1}
+.exp-name svg{flex:none;color:#8fa0b8}
+.exp-kind{color:#9aa5b6;font-size:9px}
+.exp-preview{border-top:1px solid var(--line);padding:14px 0 18px}
+.exp-preview-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+.exp-preview-head strong{display:block;font-size:11px;color:#253047}
+.exp-preview-head small{display:block;font-size:8px;color:#a0a9b8;margin-top:3px;word-break:break-all}
+.exp-preview .logs{height:190px}
+.exp-preview .muted{margin:8px 0 0}
+/* 모달 안에서는 화면이 좁다. 트리를 줄이고 목록에 자리를 준다. */
+.in-picker{padding:0 22px}
+.in-picker .exp-body{grid-template-columns:180px 1fr;min-height:300px}
+.in-picker .exp-tree,.in-picker .exp-list{max-height:300px}
+.in-picker .exp-head,.in-picker .exp-row{grid-template-columns:minmax(150px,2fr) 80px 110px}
+.in-picker .exp-kind{display:none}
+.in-picker .exp-preview .logs{height:120px}
+.in-picker .nas-foot{margin:0 -22px}
+
+/* 화면이 죽었을 때. 흰 화면 대신 무엇이 잘못됐는지 보여준다. */
+.crash{max-width:760px;margin:70px auto;padding:0 24px;color:var(--ink)}
+.crash h1{font-size:20px;margin:0 0 10px}
+.crash p{font-size:11px;line-height:1.7;color:var(--muted);margin:0 0 16px}
+.crash pre{background:#101827;color:#b9c6d8;border-radius:9px;padding:14px;font:9px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;max-height:320px;overflow:auto}
+.crash button{margin-top:14px;border:0;border-radius:8px;height:38px;padding:0 18px;background:#21b98e;color:#fff;font-size:11px;font-weight:700}

@@ -795,3 +795,95 @@ def test_env_list_surfaces_builds_the_browser_did_not_start():
 
         _drain_events(client, since=0)
         assert client.get("/api/v1/envs").json()["running_builds"] == []
+
+
+# --- 파일 탐색기 ---------------------------------------------------------------
+# 예전 것은 "탐색기"가 아니라 한 폴더만 보여주는 파일 고르기 창이었다. 폴더 구조가
+# 어디에도 안 보여서 내 결과물이 서버 어디에 쌓이는지 알 수 없었다.
+
+def _prepared_job_dir(client, tmp_path):
+    code = tmp_path / "code"
+    code.mkdir()
+    (code / "train.py").write_text("print('ok')\n", encoding="utf-8")
+    client.post("/api/v1/jobs/prepare", json=_job_payload(code))
+    jobs_root = "/data/mockuser/.seraph-gui/jobs"
+    listed = client.get(f"/api/v1/remote/ls?path={jobs_root}&show_hidden=true").json()
+    return listed["entries"][0]["path"]
+
+
+def test_listing_carries_what_a_file_browser_needs():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/remote/ls").json()
+        # 트리 루트를 화면이 /data/<사용자> 로 조립하지 않도록 서버가 내려준다.
+        assert body["data_root"] and body["datasets_root"] and body["home"]
+        for entry in body["entries"]:
+            assert {"name", "path", "is_dir", "is_link", "hidden", "size", "mtime",
+                    "is_archive"} <= set(entry)
+
+
+def test_hidden_entries_appear_only_when_asked(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        _prepared_job_dir(client, tmp_path)
+        plain = client.get("/api/v1/remote/ls").json()["entries"]
+        assert all(not e["name"].startswith(".") for e in plain)
+
+        shown = client.get("/api/v1/remote/ls?show_hidden=true").json()["entries"]
+        hidden = [e for e in shown if e["hidden"]]
+        assert any(e["name"] == ".seraph-gui" for e in hidden)
+
+
+def test_tree_asks_for_folders_only(tmp_path):
+    """트리에 파일까지 실어 보내면 데이터셋 폴더 하나가 수만 개 항목을 끌고 온다."""
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        everything = client.get(f"/api/v1/remote/ls?path={job_dir}").json()["entries"]
+        assert any(not e["is_dir"] for e in everything), "이 폴더엔 파일이 있어야 시험이 된다"
+
+        folders = client.get(f"/api/v1/remote/ls?path={job_dir}&dirs_only=true").json()["entries"]
+        assert all(e["is_dir"] for e in folders)
+        assert len(folders) < len(everything)
+
+
+def test_file_preview_returns_text_and_marks_truncation(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        target = f"{job_dir}/job.json"
+
+        full = client.get(f"/api/v1/remote/file?path={target}").json()
+        assert full["binary"] is False and full["truncated"] is False
+        assert full["text"].startswith("{")
+
+        # 상한을 넘으면 잘렸다고 말해야 한다. 조용히 자르면 사용자는 그게 전부인 줄 안다.
+        clipped = client.get(f"/api/v1/remote/file?path={target}&max_bytes=1024").json()
+        assert clipped["truncated"] is True and len(clipped["text"]) == 1024
+        assert clipped["size"] == full["size"]
+
+
+def test_binary_file_is_named_not_rendered(tmp_path):
+    """이진 파일을 텍스트로 우겨넣으면 화면이 깨진 문자로 뒤덮인다."""
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        body = client.get(f"/api/v1/remote/file?path={job_dir}/code.tar.gz").json()
+        assert body["binary"] is True and body["text"] is None
+        assert body["size"] > 0
+
+
+def test_preview_refuses_a_directory_and_a_missing_path():
+    app = create_app()
+    with TestClient(app) as client:
+        is_dir = client.get("/api/v1/remote/file?path=/data/mockuser")
+        assert is_dir.status_code == 400
+        assert is_dir.json()["error"]["code"] == "REMOTE_PATH_IS_DIR"
+        assert client.get("/api/v1/remote/file?path=/data/mockuser/nope.txt").status_code == 404
+
+
+def test_preview_size_cap_cannot_be_raised_by_the_caller():
+    """상한을 요청으로 올릴 수 있으면 체크포인트 하나로 백엔드를 메모리째 넘길 수 있다."""
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/api/v1/remote/file?path=/x&max_bytes=99999999").status_code == 422

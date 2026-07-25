@@ -31,6 +31,49 @@ def _is_supported_archive(path: str) -> bool:
 _SUBMITTED = re.compile(r"Submitted batch job\s+(\d+)")
 _JOB_ID = re.compile(r"^[0-9]+$")
 
+# 미리보기 상한. 로그 한 줄 보려고 수 GB 짜리 체크포인트를 끌어오면 안 된다.
+PREVIEW_MAX_BYTES = 256 * 1024
+
+
+def _MOCK_PUBLIC_ENTRIES(path: str) -> list[dict[str, Any]]:
+    """서버 없는 시연에서 공용 데이터셋 폴더가 비어 보이지 않게 하는 흉내."""
+    if posixpath.normpath(path) != "/data/datasets":
+        return []
+    names = [("tarfiles", True, None), ("imagenet-mini.tar.gz", False, 1_482_910_720),
+             ("cifar10.tar.gz", False, 170_498_071)]
+    return [{
+        "name": name,
+        "path": posixpath.join(path, name),
+        "is_dir": is_dir,
+        "is_link": False,
+        "hidden": False,
+        "size": size,
+        "mtime": None,
+        "is_archive": (not is_dir) and _is_supported_archive(name),
+    } for name, is_dir, size in names]
+
+
+def _preview_payload(path: str, raw: bytes, size: int, max_bytes: int) -> dict[str, Any]:
+    """읽어 온 바이트를 화면이 쓸 모양으로 바꾼다.
+
+    이진 파일을 텍스트로 우겨넣으면 화면이 깨진 문자로 뒤덮인다. 그럴 바에는
+    "이건 텍스트가 아니다"라고 말하는 게 낫다. NUL 바이트가 있으면 이진으로 본다.
+    """
+    truncated = len(raw) > max_bytes
+    raw = raw[:max_bytes]
+    if b"\x00" in raw:
+        return {
+            "path": path, "size": size, "binary": True,
+            "truncated": truncated, "text": None,
+        }
+    return {
+        "path": path,
+        "size": size,
+        "binary": False,
+        "truncated": truncated,
+        "text": raw.decode("utf-8", errors="replace"),
+    }
+
 # conda/pip 가 패키지를 받아야 하는 곳. 여기가 막혀 있으면 "처음부터 만들기"는
 # 아무리 기다려도 실패한다 — 누르기 전에 알아야 한다.
 PACKAGE_HOSTS = ("https://conda.anaconda.org/", "https://pypi.org/simple/")
@@ -180,19 +223,39 @@ class MockRemote:
     def datasets_root(self) -> str:
         return f"{self.data_root}/datasets"
 
-    def list_entries(self, path: str) -> dict[str, Any]:
+    def list_entries(self, path: str, *, show_hidden: bool = False,
+                     dirs_only: bool = False) -> dict[str, Any]:
         clean = posixpath.normpath(path or self.data_root)
+        # 샌드박스 밖(공용 데이터셋 등)은 흉내만 낸다. path_info 가 이미 같은 방식으로
+        # 공용 경로가 있는 척하므로, 탐색기만 403 을 내면 서버 없는 시연이 반쪽이 된다.
+        if not self._inside_sandbox(clean):
+            return {
+                "path": clean,
+                "parent": posixpath.dirname(clean) if clean != "/" else None,
+                "entries": [] if dirs_only else _MOCK_PUBLIC_ENTRIES(clean),
+                "data_root": self.data_root,
+                "datasets_root": self.datasets_root,
+                "home": self._home,
+            }
         base = self._local(clean)
         entries = []
         if base.is_dir():
             for child in sorted(base.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
-                if child.name.startswith("."):
+                hidden = child.name.startswith(".")
+                if hidden and not show_hidden:
                     continue
+                is_dir = child.is_dir()
+                if dirs_only and not is_dir:
+                    continue
+                info = child.stat()
                 entries.append({
                     "name": child.name,
                     "path": posixpath.join(clean, child.name),
-                    "is_dir": child.is_dir(),
-                    "size": None if child.is_dir() else child.stat().st_size,
+                    "is_dir": is_dir,
+                    "is_link": child.is_symlink(),
+                    "hidden": hidden,
+                    "size": None if is_dir else info.st_size,
+                    "mtime": int(info.st_mtime),
                     "is_archive": child.is_file() and _is_supported_archive(child.name),
                 })
         return {
@@ -201,7 +264,26 @@ class MockRemote:
             "entries": entries,
             "data_root": self.data_root,
             "datasets_root": self.datasets_root,
+            "home": self._home,
         }
+
+    def _inside_sandbox(self, path: str) -> bool:
+        clean = posixpath.normpath(path)
+        return clean == self.data_root or clean.startswith(self.data_root + "/")
+
+    def preview_file(self, path: str, max_bytes: int = PREVIEW_MAX_BYTES) -> dict[str, Any]:
+        clean = posixpath.normpath(path)
+        if not self._inside_sandbox(clean):
+            text = f"[mock] {clean} 의 내용은 실서버에 연결해야 볼 수 있습니다.\n"
+            return _preview_payload(clean, text.encode("utf-8"), len(text), max_bytes)
+        target = self._local(clean)
+        if target.is_dir():
+            raise ApiError("REMOTE_PATH_IS_DIR", "폴더는 미리 볼 수 없습니다.", 400)
+        if not target.is_file():
+            raise ApiError("REMOTE_FILE_NOT_READABLE", f"'{clean}' 를 읽을 수 없습니다.", 404)
+        with target.open("rb") as handle:
+            raw = handle.read(max_bytes + 1)
+        return _preview_payload(clean, raw, target.stat().st_size, max_bytes)
 
     def upload_dataset(self, local_path: str) -> dict[str, Any]:
         source = pathlib.Path(local_path).expanduser()
@@ -472,12 +554,16 @@ class SSHRemote:
             "작업 파일은 사용자 작업·데이터·환경 폴더 아래에만 만들 수 있습니다.",
         )
 
-    def list_entries(self, path: str) -> dict[str, Any]:
+    def list_entries(self, path: str, *, show_hidden: bool = False,
+                     dirs_only: bool = False) -> dict[str, Any]:
         """디렉토리 내용을 나열한다(읽기 전용).
 
         경로를 눈 감고 타이핑하게 만들지 않으려고 만들었다. 쓰기와 달리 읽기는
         /data 아래 공용 데이터셋도 봐야 해서 사용자 폴더로 제한하지 않는다.
         서버가 권한을 강제하므로 못 읽는 곳은 그냥 실패한다.
+
+        dirs_only 는 왼쪽 폴더 트리용이다. 트리에 파일까지 실어 보내면 데이터셋
+        폴더 하나가 수만 개 항목을 끌고 온다.
         """
         clean = posixpath.normpath(path or self.data_root)
         with self._sftp_lock:
@@ -492,14 +578,26 @@ class SSHRemote:
 
         entries = []
         for a in attrs:
-            if a.filename.startswith("."):
-                continue                      # 숨김 파일은 감춘다(.seraph-gui 포함)
-            is_dir = stat.S_ISDIR(a.st_mode or 0)
+            hidden = a.filename.startswith(".")
+            if hidden and not show_hidden:
+                continue                      # 숨김 항목은 기본으로 감춘다(.seraph-gui 포함)
+            mode = a.st_mode or 0
+            is_link = stat.S_ISLNK(mode)
+            is_dir = stat.S_ISDIR(mode)
+            if is_link:
+                # 심볼릭 링크는 st_mode 가 링크 자신을 가리킨다. 가리키는 대상이
+                # 폴더면 폴더처럼 열 수 있어야 하므로 한 번 더 물어본다.
+                is_dir = self._link_is_dir(posixpath.join(clean, a.filename))
+            if dirs_only and not is_dir:
+                continue
             entries.append({
                 "name": a.filename,
                 "path": posixpath.join(clean, a.filename),
                 "is_dir": is_dir,
+                "is_link": is_link,
+                "hidden": hidden,
                 "size": None if is_dir else int(a.st_size or 0),
+                "mtime": int(a.st_mtime) if a.st_mtime else None,
                 "is_archive": (not is_dir) and _is_supported_archive(a.filename),
             })
         entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
@@ -509,7 +607,40 @@ class SSHRemote:
             "entries": entries,
             "data_root": self.data_root,
             "datasets_root": self.datasets_root,
+            "home": self._home,
         }
+
+    def _link_is_dir(self, path: str) -> bool:
+        with self._sftp_lock:
+            try:
+                return stat.S_ISDIR(self.sftp.stat(path).st_mode or 0)
+            except OSError:
+                return False              # 끊어진 링크. 파일처럼 두면 열려다 실패한다
+
+    def preview_file(self, path: str, max_bytes: int = PREVIEW_MAX_BYTES) -> dict[str, Any]:
+        """파일 앞부분을 텍스트로 보여준다.
+
+        결과 파일 한 줄 보려고 터미널을 여는 일을 없애려는 것이다. 목록과 마찬가지로
+        사용자 폴더로 제한하지 않는다 — 어차피 SSH 로 접속한 본인이 읽을 수 있는
+        것만 서버가 내주고, 못 읽는 곳은 그냥 실패한다.
+        """
+        clean = posixpath.normpath(path)
+        with self._sftp_lock:
+            try:
+                info = self.sftp.stat(clean)
+                if stat.S_ISDIR(info.st_mode or 0):
+                    raise ApiError("REMOTE_PATH_IS_DIR", "폴더는 미리 볼 수 없습니다.", 400)
+                with self.sftp.file(clean, "rb") as handle:
+                    raw = handle.read(max_bytes + 1)
+            except ApiError:
+                raise
+            except OSError as exc:
+                raise ApiError(
+                    "REMOTE_FILE_NOT_READABLE",
+                    f"'{clean}' 를 읽을 수 없습니다. 경로나 권한을 확인하세요.",
+                    status_code=404,
+                ) from exc
+        return _preview_payload(clean, raw, int(info.st_size or 0), max_bytes)
 
     def upload_dataset(self, local_path: str) -> dict[str, Any]:
         """로컬 압축 파일을 사용자 NAS 데이터 폴더로 올린다."""
