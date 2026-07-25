@@ -206,6 +206,20 @@ function ConnectCard({ mode, clusters, routing, health, loading, onConnect }) {
   </div></div>;
 }
 
+// 서랍 공통 껍데기. 바깥을 누르거나 Esc 로 닫힌다 — 닫는 방법이 X 버튼 하나뿐이면
+// 사용자는 갇혔다고 느낀다. 내 작업·완료 이력 두 서랍이 같이 쓴다.
+function DrawerShell({ onClose, label, children }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return <>
+    <div className="drawer-scrim" onClick={onClose} aria-hidden="true"/>
+    <div className="job-drawer" role="dialog" aria-modal="true" aria-label={label || "상세"}>{children}</div>
+  </>;
+}
+
 function fmtBytes(n) {
   if (n == null) return "";
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -546,6 +560,11 @@ export default function App() {
   const nav = [
     ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
   ];
+  // 사이드바 배지는 "지금 신경 쓸 게 있나"를 뜻한다. 전체 개수를 띄우면 끝난 작업이
+  // 남아 있는 한 영원히 사라지지 않아서, 배지가 아무 의미도 갖지 못한다.
+  const activeJobCount = useMemo(
+    () => jobs.filter((j) => ACTIVE.has(j.status)).length, [jobs]);
+
   // 정렬한 뒤에 자르므로, '사용 가능순'이면 여유 많은 노드 8개가 위로 온다(-w 로 고를 노드 찾기).
   const visibleNodes = useMemo(() => {
     const list = [...(cluster?.nodes?.length ? cluster.nodes : nodes)];
@@ -558,7 +577,7 @@ export default function App() {
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><span /><span /><span /></div><div><strong>SERAPH</strong><small>GPU CONSOLE</small></div></div>
-      <nav>{nav.map(([key, icon, label]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon name={icon}/><span>{label}</span>{key === "jobs" && jobs.length > 0 && <b>{jobs.length}</b>}</button>)}</nav>
+      <nav>{nav.map(([key, icon, label]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon name={icon}/><span>{label}</span>{key === "jobs" && activeJobCount > 0 && <b>{activeJobCount}</b>}</button>)}</nav>
       <div className="side-note"><Icon name="server"/><div><strong>{health?.mode === "ssh" ? "SERAPH 연결" : "Mock 시연 모드"}</strong><span>{health?.seraph_reachable ? "정상 연결됨" : "연결 필요"}</span></div><i className={health?.seraph_reachable ? "online" : ""}/></div>
       <p className="version">Local console · v1.1.1</p>
     </aside>
@@ -664,7 +683,7 @@ export default function App() {
 
       {tab === "jobs" && <section className="page jobs-page">
         <article className="panel jobs-panel"><div className="panel-head"><div><p className="eyebrow">SLURM JOBS</p><h2>작업별 실행 상태</h2></div><button className="secondary compact" onClick={loadJobs}><Icon name="refresh" size={16}/> 새로고침</button></div><JobTable jobs={jobs} onOpen={openJob}/></article>
-        {selected && <div className="job-drawer"><div className="drawer-head"><div><p className="eyebrow">JOB DETAIL</p><h2>{selected.job.job_name}</h2></div><button onClick={() => setSelected(null)}><Icon name="close"/></button></div><div className="drawer-status"><StatusPill status={selected.job.status}/><span>Slurm #{selected.job.slurm_job_id || "미제출"}</span></div><dl className="detail-grid"><div><dt>파티션</dt><dd>{selected.job.partition}</dd></div><div><dt>노드</dt><dd>{selected.job.node || "자동"}</dd></div><div><dt>GPU</dt><dd>{selected.job.gpus}개</dd></div><div><dt>시간 제한</dt><dd>{selected.job.time_limit}</dd></div><div className="wide"><dt>데이터</dt><dd>{selected.job.dataset_path}</dd></div><div className="wide"><dt>결과</dt><dd>{selected.job.output_path}</dd></div></dl><div className="log-tabs"><span><Icon name="terminal" size={17}/> stdout · 수동 갱신</span><div><button onClick={() => refreshJobLogs(selected.job.local_job_id)}><Icon name="refresh" size={15}/> 로그 갱신</button><button onClick={() => navigator.clipboard.writeText(logs?.stdout || "")}><Icon name="copy" size={15}/> 복사</button></div></div><pre className="logs">{logs?.stdout || "아직 출력 로그가 없습니다."}{logs?.stderr ? `\n\n[stderr]\n${logs.stderr}` : ""}</pre>{ACTIVE.has(selected.job.status) && selected.job.slurm_job_id && <button className="danger-button" onClick={() => cancel(selected.job.local_job_id)}>작업 취소</button>}</div>}
+        {selected && <DrawerShell onClose={() => setSelected(null)} label="작업 상세"><div className="drawer-head"><div><p className="eyebrow">JOB DETAIL</p><h2>{selected.job.job_name}</h2></div><button onClick={() => setSelected(null)}><Icon name="close"/></button></div><div className="drawer-status"><StatusPill status={selected.job.status}/><span>Slurm #{selected.job.slurm_job_id || "미제출"}</span></div><dl className="detail-grid"><div><dt>파티션</dt><dd>{selected.job.partition}</dd></div><div><dt>노드</dt><dd>{selected.job.node || "자동"}</dd></div><div><dt>GPU</dt><dd>{selected.job.gpus}개</dd></div><div><dt>시간 제한</dt><dd>{selected.job.time_limit}</dd></div><div className="wide"><dt>데이터</dt><dd>{selected.job.dataset_path}</dd></div><div className="wide"><dt>결과</dt><dd>{selected.job.output_path}</dd></div></dl><div className="log-tabs"><span><Icon name="terminal" size={17}/> stdout · 수동 갱신</span><div><button onClick={() => refreshJobLogs(selected.job.local_job_id)}><Icon name="refresh" size={15}/> 로그 갱신</button><button onClick={() => navigator.clipboard.writeText(logs?.stdout || "")}><Icon name="copy" size={15}/> 복사</button></div></div><pre className="logs">{logs?.stdout || "아직 출력 로그가 없습니다."}{logs?.stderr ? `\n\n[stderr]\n${logs.stderr}` : ""}</pre>{ACTIVE.has(selected.job.status) && selected.job.slurm_job_id && <button className="danger-button" onClick={() => cancel(selected.job.local_job_id)}>작업 취소</button>}</DrawerShell>}
       </section>}
 
       {tab === "history" && <section className="page history-page">
@@ -1017,7 +1036,7 @@ function TutorialStep({ step, n }) {
 
 function HistoryDetail({ job, onClose }) {
   const memPct = job.req_mem_mb && job.max_rss_mb != null ? Math.min(100, Math.round(job.max_rss_mb / job.req_mem_mb * 100)) : null;
-  return <div className="job-drawer">
+  return <DrawerShell onClose={onClose} label="완료 작업 상세">
     <div className="drawer-head"><div><p className="eyebrow">JOB RESULT</p><h2>{job.name}</h2></div><button onClick={onClose}><Icon name="close"/></button></div>
     <div className="drawer-status"><StatusPill status={job.state}/><span>Slurm #{job.job_id}</span></div>
     <div className={`history-advice ${job.succeeded ? "ok" : "bad"}`}><Icon name={job.succeeded ? "check" : "warn"} size={18}/><p>{job.succeeded ? "정상적으로 완료되었습니다." : (job.advice || job.reason_text)}</p></div>
@@ -1032,5 +1051,5 @@ function HistoryDetail({ job, onClose }) {
       <div className="wide"><dt>시작 → 종료</dt><dd>{fmtTime(job.start)} → {fmtTime(job.end)}</dd></div>
       {job.cancelled_by && <div className="wide"><dt>취소 주체</dt><dd>{job.cancelled_by}</dd></div>}
     </dl>
-  </div>;
+  </DrawerShell>;
 }

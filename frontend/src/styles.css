@@ -257,3 +257,7 @@ button.hrow:hover{background:#f8fafc}
 .nas-size{font-size:9px;color:#98a2b3;flex:none}
 .nas-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 22px;border-top:1px solid var(--line);background:#fafbfd}
 .nas-foot>span{font-size:9px;color:#8b96a7;line-height:1.45}
+
+/* 서랍 뒤 배경. 누르면 닫힌다(서랍보다 아래, 나머지 UI 보다 위). */
+.drawer-scrim{position:fixed;inset:0;z-index:29;background:rgba(16,25,43,.28);backdrop-filter:blur(1.5px);animation:scrimIn .18s ease-out}
+@keyframes scrimIn{from{opacity:0}}
