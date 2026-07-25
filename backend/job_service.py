@@ -24,7 +24,7 @@ from seraph.parsers.testonly import parse_test_only
 
 from .dependencies import ConnectionManager
 from .errors import ApiError
-from .remote import MockRemote, SSHRemote, read_job_json
+from .remote import MockRemote, SSHRemote, _is_supported_archive, read_job_json
 from .schemas import JobSpec
 
 _ARCHIVE_EXCLUDES = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
@@ -52,9 +52,8 @@ def _is_under(path: str, root: str) -> bool:
     return clean == root or clean.startswith(root + "/")
 
 
-def _is_supported_dataset_archive(path: str) -> bool:
-    lower = path.lower()
-    return lower.endswith((".tar", ".tar.gz", ".tgz", ".zip"))
+# 판별 규칙은 remote 쪽과 하나로 유지한다(업로드와 검증이 어긋나면 안 된다).
+_is_supported_dataset_archive = _is_supported_archive
 
 
 def _public_prediction(raw: str) -> dict[str, Any]:
@@ -380,7 +379,7 @@ class JobService:
 
         if meta.get("conda_env"):
             env = shlex.quote(meta["conda_env"])
-            conda_sh = shlex.quote(f"{self.remote.data_root}/anaconda3/etc/profile.d/conda.sh")
+            conda_sh = shlex.quote(self._conda_sh(meta))
             lines.extend([
                 f'[ -r {conda_sh} ] || {{ echo "개인 Conda 초기화 파일을 찾을 수 없습니다: {conda_sh}" >&2; exit 127; }}',
                 f'. {conda_sh}',
@@ -396,6 +395,36 @@ class JobService:
             run,
         ])
         return "\n".join(lines)
+
+    def _resolve_conda_root(self, conda_env: str | None) -> str | None:
+        """이 환경 이름을 가진 conda 설치를 찾는다. 개인 설치를 공용보다 우선한다.
+
+        환경을 안 쓰면 None. 못 찾으면 None 을 돌려주고 _conda_sh 가 예전 기본값으로
+        떨어진다 — 그 경우 job 이 "conda 초기화 파일을 찾을 수 없습니다" 로 명확히 죽는다.
+        """
+        if not conda_env:
+            return None
+        try:
+            found = self.remote.find_conda()
+        except Exception:
+            return None
+        installs = found.get("installs", [])
+        for install in sorted(installs, key=lambda i: not i.get("is_personal")):
+            if conda_env in (install.get("envs") or []):
+                return install["root"]
+        return installs[0]["root"] if installs else None
+
+    def _conda_sh(self, meta: dict[str, Any]) -> str:
+        """이 job 이 source 할 conda.sh 경로.
+
+        예전에는 개인 설치(/data/<user>/anaconda3)만 가정해서, 그게 없으면 공용
+        설치(/data/opt/anaconda3)에 환경이 있어도 쓸 수 없었다. 이제 준비 단계에서
+        실제로 찾은 설치 경로를 meta 에 적어두고 그걸 쓴다.
+        """
+        root = meta.get("conda_root")
+        if root:
+            return f"{root}/etc/profile.d/conda.sh"
+        return f"{self.remote.data_root}/anaconda3/etc/profile.d/conda.sh"
 
     def _preflight_script(self, meta: dict[str, Any]) -> str:
         job_dir = shlex.quote(meta["remote_dir"])
@@ -425,7 +454,7 @@ class JobService:
         lines.append(f'test -f "$CODE_DIR"/{entrypoint}')
         if meta.get("conda_env"):
             env = shlex.quote(meta["conda_env"])
-            conda_sh = shlex.quote(f"{self.remote.data_root}/anaconda3/etc/profile.d/conda.sh")
+            conda_sh = shlex.quote(self._conda_sh(meta))
             lines.extend([
                 f"test -r {conda_sh}",
                 f". {conda_sh}",
@@ -596,6 +625,7 @@ class JobService:
             "node": validation["resolved"]["node"],
             "auto_selected_node": validation["resolved"]["auto_selected_node"],
             "conda_env": spec.conda_env,
+            "conda_root": self._resolve_conda_root(spec.conda_env),
             "code_source_name": code["display_name"],
             "code_archive_name": archive_name,
             "code_archive_kind": code["kind"],

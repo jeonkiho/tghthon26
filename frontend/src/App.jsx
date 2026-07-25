@@ -185,6 +185,79 @@ function ConnectCard({ mode, clusters, routing, health, loading, onConnect }) {
   </div></div>;
 }
 
+function fmtBytes(n) {
+  if (n == null) return "";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)}${u[i]}`;
+}
+
+// NAS 탐색기. 데이터 경로를 눈으로 보고 고르게 한다 — 예전에는 서버 경로를
+// 맨 입력창에 직접 타이핑해야 했고, 기본값조차 존재하지 않는 경로였다.
+function NasBrowser({ open, onClose, onPick, onUpload, uploading }) {
+  const [path, setPath] = useState(null);
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const load = useCallback(async (target) => {
+    setBusy(true); setErr(null);
+    try {
+      const q = target ? `?path=${encodeURIComponent(target)}` : "";
+      const d = await api(`/api/v1/remote/ls${q}`);
+      setData(d); setPath(d.path);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }, []);
+
+  useEffect(() => { if (open) load(path); }, [open]);   // 열 때만 로드
+  if (!open) return null;
+
+  const entries = data?.entries || [];
+  return <div className="connect-overlay" onClick={onClose}>
+    <div className="nas-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="nas-head">
+        <div>
+          <p className="eyebrow">NAS BROWSER</p>
+          <h2>데이터 파일 선택</h2>
+        </div>
+        <button className="icon-button" onClick={onClose} aria-label="닫기"><Icon name="close" size={18}/></button>
+      </div>
+
+      <div className="nas-bar">
+        <button className="secondary compact" disabled={!data?.parent || busy} onClick={() => load(data.parent)}>상위</button>
+        <code className="nas-path">{path || "…"}</code>
+        <button className="secondary compact" disabled={busy} onClick={() => load(data?.data_root)}>내 폴더</button>
+      </div>
+
+      {err && <p className="nas-err">{err}</p>}
+
+      <div className="nas-list">
+        {busy && <div className="empty-mini"><span>불러오는 중…</span></div>}
+        {!busy && !entries.length && !err && <div className="empty-mini"><Icon name="folder" size={20}/><span>이 폴더는 비어 있습니다.</span></div>}
+        {!busy && entries.map((e) => <button
+          key={e.path}
+          className={`nas-row ${e.is_dir ? "dir" : e.is_archive ? "ok" : "dim"}`}
+          onClick={() => e.is_dir ? load(e.path) : e.is_archive && onPick(e.path)}
+          disabled={!e.is_dir && !e.is_archive}
+          title={e.is_dir ? "" : e.is_archive ? "이 파일을 데이터로 사용" : "압축 파일(.tar/.tar.gz/.tgz/.zip)만 사용할 수 있습니다"}>
+          <Icon name={e.is_dir ? "folder" : "server"} size={15}/>
+          <span className="nas-name">{e.name}</span>
+          <span className="nas-size">{e.is_dir ? "폴더" : fmtBytes(e.size)}</span>
+        </button>)}
+      </div>
+
+      <div className="nas-foot">
+        <span>압축 파일(.tar · .tar.gz · .tgz · .zip)만 고를 수 있습니다 — NAS IOPS 보호</span>
+        <button className="primary compact" onClick={onUpload} disabled={uploading}>
+          <Icon name="plus" size={15}/> {uploading ? "올리는 중…" : "내 PC에서 올리기"}
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
 function ErrorToast({ error, onClose }) {
   if (!error) return null;
   return <div className="toast" role="alert">
@@ -239,6 +312,11 @@ export default function App() {
   // 접속 폼 상태(사용자명·학과·비밀번호)는 ConnectCard 안에 있다.
   // 연결에 성공하면 카드가 언마운트되면서 비밀번호도 함께 사라진다.
 
+  // NAS 데이터 선택·업로드. 서버 경로를 타이핑하지 않아도 되게 한다.
+  const [nasOpen, setNasOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [condaInstalls, setCondaInstalls] = useState([]);
+
   // 노드 표 정렬 기준. 한 번 고르면 다음에 들어와도 그대로 쓰도록 저장한다.
   const [nodeSort, setNodeSort] = useState(() => {
     try { return localStorage.getItem(NODE_SORT_KEY) || "name"; } catch { return "name"; }
@@ -283,7 +361,11 @@ export default function App() {
     try {
       const data = await api("/api/v1/health"); setHealth(data);
       api("/api/v1/clusters").then(setClusterInfo).catch(() => {});  // 정적 안내(라우팅 표 포함), 1회만
-      if (data.seraph_reachable) await Promise.all([loadDashboard(), loadJobs()]);
+      if (data.seraph_reachable) {
+        await Promise.all([loadDashboard(), loadJobs()]);
+        // conda 설치는 잘 안 바뀐다. 실패해도 폼은 그대로 쓸 수 있어야 한다.
+        api("/api/v1/remote/conda").then((c) => setCondaInstalls(c.installs || [])).catch(() => {});
+      }
     } catch (err) { report(err); }
   }, [loadDashboard, loadJobs, report]);
 
@@ -361,6 +443,16 @@ export default function App() {
   const chooseCode = (kind) => runAction(async () => {
     const data = await api(`/api/v1/local/select-code?kind=${kind}`, { method: "POST" });
     if (data.path) setForm((old) => ({ ...old, local_code_path: data.path }));
+  });
+
+  const pickDataset = (path) => { setForm((old) => ({ ...old, dataset_path: path })); setNasOpen(false); };
+
+  const uploadDataset = () => runAction(async () => {
+    setUploading(true);
+    try {
+      const d = await api("/api/v1/remote/datasets/upload", { method: "POST" });
+      if (d.selected && d.dataset) { pickDataset(d.dataset.path); }
+    } finally { setUploading(false); }
   });
 
   const recommend = () => runAction(async () => {
@@ -511,10 +603,25 @@ export default function App() {
             <div className="field-grid"><Field label="작업 이름"><input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})}/></Field><Field label="진입 파일"><input value={form.entrypoint} onChange={(e) => setForm({...form, entrypoint: e.target.value})}/></Field></div>
             <Field label="로컬 코드 경로" hint="코드 폴더, .py, .zip, .tar.gz"><div className="path-input"><input placeholder="예: C:\Users\me\project" value={form.local_code_path} onChange={(e) => setForm({...form, local_code_path: e.target.value})}/><button onClick={() => chooseCode("directory")}><Icon name="folder" size={17}/> 폴더</button><button onClick={() => chooseCode("file")}>파일</button></div></Field>
             <Field label="실행 인자" hint="한 줄에 인자 하나 · {dataset}, {output} 사용 가능"><textarea rows="5" value={form.argsText} onChange={(e) => setForm({...form, argsText: e.target.value})}/></Field>
-            <Field label="Conda 환경 (선택)"><input placeholder="예: pytorch-2.6" value={form.conda_env} onChange={(e) => setForm({...form, conda_env: e.target.value})}/></Field>
+            <Field label="Conda 환경 (선택)" hint={condaInstalls.length ? `서버에서 찾은 설치 ${condaInstalls.length}곳` : "서버에서 conda 설치를 찾지 못했습니다"}>
+              {condaInstalls.some((i) => (i.envs || []).length)
+                ? <select value={form.conda_env} onChange={(e) => setForm({...form, conda_env: e.target.value})}>
+                    <option value="">사용 안 함 (기본 python)</option>
+                    {condaInstalls.map((inst) => (inst.envs || []).map((env) => (
+                      <option key={`${inst.root}/${env}`} value={env}>{env} — {inst.is_personal ? "내 설치" : "공용"}</option>
+                    )))}
+                  </select>
+                : <input placeholder="예: pytorch1.12.1_p38" value={form.conda_env} onChange={(e) => setForm({...form, conda_env: e.target.value})}/>}
+            </Field>
           </article>
           <article className="panel form-panel"><SectionTitle number="02" title="데이터와 결과" subtitle="대용량 데이터는 업로드하지 않고 기존 NAS 경로를 사용합니다."/>
-            <Field label="NAS 데이터 경로"><input value={form.dataset_path} onChange={(e) => setForm({...form, dataset_path: e.target.value})}/></Field>
+            <Field label="NAS 데이터 경로" hint="압축 파일 하나 · 찾아보기로 고르거나 내 PC에서 올릴 수 있습니다">
+              <div className="path-input">
+                <input placeholder="예: /data/사용자명/datasets/images.tar.gz" value={form.dataset_path} onChange={(e) => setForm({...form, dataset_path: e.target.value})}/>
+                <button onClick={() => setNasOpen(true)}><Icon name="folder" size={17}/> 찾아보기</button>
+                <button onClick={uploadDataset} disabled={uploading}>{uploading ? "올리는 중…" : "올리기"}</button>
+              </div>
+            </Field>
             <label className="switch-row"><button type="button" className="switch on" disabled aria-label="GPU 노드 로컬 복사 필수"><i/></button><div><strong>/local_datasets로 복사·압축 해제</strong><span>튜토리얼 준수를 위해 항상 적용되며 끌 수 없습니다.</span></div></label>
             <Field label="결과 저장 경로"><input value={form.output_path} onChange={(e) => setForm({...form, output_path: e.target.value})}/></Field>
           </article>
@@ -572,6 +679,7 @@ export default function App() {
       </section>}
     </main>
 
+    <NasBrowser open={nasOpen} onClose={() => setNasOpen(false)} onPick={pickDataset} onUpload={uploadDataset} uploading={uploading}/>
     {health && !health.seraph_reachable && <ConnectCard mode={health.mode} clusters={clusterInfo?.clusters} routing={clusterInfo?.routing} health={health} loading={loading} onConnect={connect}/>}
     {loading && <div className="loading-line"/>}
     <ErrorToast error={error} onClose={() => setError(null)}/>

@@ -9,6 +9,7 @@ import posixpath
 import re
 import shlex
 import shutil
+import stat
 import tempfile
 import time
 from dataclasses import dataclass
@@ -17,6 +18,12 @@ from typing import Any
 from seraph.connection import MockConnection
 
 from .errors import ApiError
+
+
+def _is_supported_archive(path: str) -> bool:
+    """세라프가 허용하는 데이터셋 압축 형식. NAS IOPS 보호를 위해 파일 하나로 올린다."""
+    lower = path.lower()
+    return lower.endswith((".tar", ".tar.gz", ".tgz", ".zip"))
 
 _SUBMITTED = re.compile(r"Submitted batch job\s+(\d+)")
 _JOB_ID = re.compile(r"^[0-9]+$")
@@ -126,6 +133,52 @@ class MockRemote:
             raise FileNotFoundError(remote_path)
         with target.open("rb") as handle:
             return handle.read(max_bytes + 1)[:max_bytes].decode("utf-8", errors="replace")
+
+    @property
+    def datasets_root(self) -> str:
+        return f"{self.data_root}/datasets"
+
+    def list_entries(self, path: str) -> dict[str, Any]:
+        clean = posixpath.normpath(path or self.data_root)
+        base = self._local(clean)
+        entries = []
+        if base.is_dir():
+            for child in sorted(base.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+                if child.name.startswith("."):
+                    continue
+                entries.append({
+                    "name": child.name,
+                    "path": posixpath.join(clean, child.name),
+                    "is_dir": child.is_dir(),
+                    "size": None if child.is_dir() else child.stat().st_size,
+                    "is_archive": child.is_file() and _is_supported_archive(child.name),
+                })
+        return {
+            "path": clean,
+            "parent": posixpath.dirname(clean) if clean != "/" else None,
+            "entries": entries,
+            "data_root": self.data_root,
+            "datasets_root": self.datasets_root,
+        }
+
+    def upload_dataset(self, local_path: str) -> dict[str, Any]:
+        source = pathlib.Path(local_path).expanduser()
+        if not source.is_file():
+            raise ApiError("LOCAL_FILE_NOT_FOUND", "선택한 파일을 찾을 수 없습니다.", 400)
+        if not _is_supported_archive(source.name):
+            raise ApiError("DATASET_ARCHIVE_REQUIRED", "TAR, TAR.GZ, TGZ, ZIP 만 올릴 수 있습니다.", 400)
+        target = f"{self.datasets_root}/{source.name}"
+        self.upload_file(str(source), target)
+        return {"path": target, "name": source.name, "size": source.stat().st_size}
+
+    def find_conda(self) -> dict[str, Any]:
+        # mock 은 개인 설치 하나가 있는 것으로 흉내 낸다.
+        return {"installs": [{
+            "root": f"{self.data_root}/anaconda3",
+            "conda_sh": f"{self.data_root}/anaconda3/etc/profile.d/conda.sh",
+            "is_personal": True,
+            "envs": ["pytorch1.12.1_p38"],
+        }]}
 
     def list_directories(self, root: str) -> list[str]:
         base = self._local(root)
@@ -248,16 +301,121 @@ class SSHRemote:
     def jobs_root(self) -> str:
         return f"{self.data_root}/.seraph-gui/jobs"
 
-    def _guard_job_path(self, path: str) -> str:
+    @property
+    def datasets_root(self) -> str:
+        """웹에서 올린 데이터셋이 들어가는 곳. 사용자 자기 NAS 폴더 안이다."""
+        return f"{self.data_root}/datasets"
+
+    def _guard_write(self, path: str, roots: list[str], message: str) -> str:
         clean = posixpath.normpath(path)
-        root = posixpath.normpath(self.jobs_root)
-        if clean != root and not clean.startswith(root + "/"):
+        for root in roots:
+            root = posixpath.normpath(root)
+            if clean == root or clean.startswith(root + "/"):
+                return clean
+        raise ApiError("REMOTE_PATH_NOT_ALLOWED", message, status_code=403)
+
+    def _guard_job_path(self, path: str) -> str:
+        # 쓰기는 여전히 사용자 소유 폴더로만 제한한다. 데이터셋 업로드 때문에
+        # 허용 루트가 하나 늘었을 뿐, /data 전체가 열린 게 아니다.
+        return self._guard_write(
+            path,
+            [self.jobs_root, self.datasets_root],
+            "작업 파일은 사용자 작업·데이터 폴더 아래에만 만들 수 있습니다.",
+        )
+
+    def list_entries(self, path: str) -> dict[str, Any]:
+        """디렉토리 내용을 나열한다(읽기 전용).
+
+        경로를 눈 감고 타이핑하게 만들지 않으려고 만들었다. 쓰기와 달리 읽기는
+        /data 아래 공용 데이터셋도 봐야 해서 사용자 폴더로 제한하지 않는다.
+        서버가 권한을 강제하므로 못 읽는 곳은 그냥 실패한다.
+        """
+        clean = posixpath.normpath(path or self.data_root)
+        try:
+            attrs = self.sftp.listdir_attr(clean)
+        except OSError as exc:
             raise ApiError(
-                "REMOTE_PATH_NOT_ALLOWED",
-                "작업 파일은 사용자 작업 폴더 아래에만 만들 수 있습니다.",
-                status_code=403,
+                "REMOTE_PATH_NOT_LISTABLE",
+                f"'{clean}' 를 열 수 없습니다. 경로나 권한을 확인하세요.",
+                status_code=404,
+            ) from exc
+
+        entries = []
+        for a in attrs:
+            if a.filename.startswith("."):
+                continue                      # 숨김 파일은 감춘다(.seraph-gui 포함)
+            is_dir = stat.S_ISDIR(a.st_mode or 0)
+            entries.append({
+                "name": a.filename,
+                "path": posixpath.join(clean, a.filename),
+                "is_dir": is_dir,
+                "size": None if is_dir else int(a.st_size or 0),
+                "is_archive": (not is_dir) and _is_supported_archive(a.filename),
+            })
+        entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+        return {
+            "path": clean,
+            "parent": posixpath.dirname(clean) if clean != "/" else None,
+            "entries": entries,
+            "data_root": self.data_root,
+            "datasets_root": self.datasets_root,
+        }
+
+    def upload_dataset(self, local_path: str) -> dict[str, Any]:
+        """로컬 압축 파일을 사용자 NAS 데이터 폴더로 올린다."""
+        source = pathlib.Path(local_path).expanduser()
+        if not source.is_file():
+            raise ApiError("LOCAL_FILE_NOT_FOUND", "선택한 파일을 찾을 수 없습니다.", 400)
+        if not _is_supported_archive(source.name):
+            raise ApiError(
+                "DATASET_ARCHIVE_REQUIRED",
+                "NAS IOPS 보호를 위해 TAR, TAR.GZ, TGZ 또는 ZIP 파일만 올릴 수 있습니다.",
+                400,
             )
-        return clean
+        target = f"{self.datasets_root}/{source.name}"
+        self.upload_file(str(source), target)
+        return {"path": target, "name": source.name, "size": source.stat().st_size}
+
+    def find_conda(self) -> dict[str, Any]:
+        """쓸 수 있는 conda 설치와 환경을 찾는다.
+
+        예전에는 /data/<user>/anaconda3 하나만 가정해서, 그게 없으면 공용
+        설치(/data/opt/anaconda3)가 있어도 환경을 고를 방법이 없었다.
+        """
+        candidates = [
+            f"{self.data_root}/anaconda3",
+            f"{self.data_root}/miniconda3",
+            f"{self.connection.config.data_root}/opt/anaconda3",
+            f"{self._home}/anaconda3",
+            f"{self._home}/miniconda3",
+        ]
+        seen, installs = set(), []
+        for root in candidates:
+            root = posixpath.normpath(root)
+            if root in seen:
+                continue
+            seen.add(root)
+            quoted = shlex.quote(root)
+            command = (
+                f"r={quoted}; "
+                'if [ -r "$r/etc/profile.d/conda.sh" ]; then '
+                '  echo OK; ls -1 "$r/envs" 2>/dev/null; '
+                "fi"
+            )
+            try:
+                raw = self.connection.run_command(command, label="conda 확인", timeout=15)
+            except Exception:
+                continue
+            lines = [x.strip() for x in raw.splitlines() if x.strip()]
+            if not lines or lines[0] != "OK":
+                continue
+            installs.append({
+                "root": root,
+                "conda_sh": f"{root}/etc/profile.d/conda.sh",
+                "is_personal": root.startswith(self.data_root + "/") or root.startswith(self._home + "/"),
+                "envs": lines[1:],
+            })
+        return {"installs": installs}
 
     def path_info(self, path: str) -> PathInfo:
         quoted = shlex.quote(path)
