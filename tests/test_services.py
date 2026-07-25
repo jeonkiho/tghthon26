@@ -491,3 +491,23 @@ def test_run_command_check_false_still_returns_output_on_success():
     conn = _bare_ssh_connection(_FakeClient("RUNNING|None|moana-u1|0:05", "", rc=0))
     out = conn.run_command("squeue -h -j 1", check=False)
     assert out.startswith("RUNNING|")
+
+
+def test_job_state_survives_accounting_db_outage():
+    """slurmdbd 가 죽어도 작업 상세가 500 이 되면 안 된다.
+
+    실측: sacct 가 'Problem talking to the database: Connection timed out' 로 rc=1.
+    최신 상태만 포기하고(None) 저장된 상태를 보여줘야 한다.
+    """
+    from backend.remote import SSHRemote
+
+    class _Conn:
+        def run_command(self, command, label='명령', timeout=30, check=True):
+            if command.startswith('squeue'):
+                return ''            # 큐에 없음(끝난 job)
+            assert check is False, 'sacct 실패가 예외가 되면 상세 화면이 통째로 죽는다'
+            return ''                # 회계 DB 장애
+
+    remote = SSHRemote.__new__(SSHRemote)   # __init__ 은 실제 SSH/SFTP 를 연다
+    remote.connection = _Conn()
+    assert remote.job_state('131837') is None

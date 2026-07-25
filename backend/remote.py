@@ -602,10 +602,16 @@ class SSHRemote:
                 "exit_code": None,
             }
 
+        # 회계 DB(slurmdbd)는 우리 통제 밖이고 실제로 가끔 죽는다. 실측 사례:
+        #   sacct: error: failed to open persistent connection to ariel-master:6819
+        #   sacct: error: Problem talking to the database: Connection timed out
+        # 그때 예외를 던지면 작업 상세가 통째로 500 이 된다 — 정작 메타데이터와 로그는
+        # 멀쩡한데도. 최신 상태만 포기하고(None) 저장된 상태를 그대로 보여주는 게 낫다.
         accounting = self.connection.run_command(
             f'sacct -n -P -j {job_id} -X -o "JobIDRaw,State,ExitCode,Elapsed,NodeList"',
             label="완료 작업 상태",
             timeout=30,
+            check=False,
         )
         for line in accounting.splitlines():
             parts = line.split("|")
