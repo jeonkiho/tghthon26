@@ -19,7 +19,7 @@ from .cache import SnapshotCache
 from .dependencies import ConnectionManager
 from .errors import ApiError, install_error_handlers
 from .job_service import JobService
-from .local_picker import select_code_path
+from .local_picker import select_code_path, select_dataset_archive
 from .occupancy_history import OccupancyHistory
 from .schemas import (
     ConnectRequest,
@@ -156,6 +156,30 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     ) -> dict[str, Any]:
         selected = await to_thread.run_sync(lambda: select_code_path(kind))
         return {"ok": True, "selected": bool(selected), "path": selected}
+
+    # --- NAS 탐색·업로드 ---------------------------------------------------
+    # 데이터 경로를 눈 감고 타이핑하게 만들면 "터미널 없이"가 거짓말이 된다.
+
+    @app.get("/api/v1/remote/ls")
+    async def remote_ls(path: str | None = None) -> dict[str, Any]:
+        remote = jobs.remote
+        target = path or remote.data_root
+        return {"ok": True, **await to_thread.run_sync(lambda: remote.list_entries(target))}
+
+    @app.get("/api/v1/remote/conda")
+    async def remote_conda() -> dict[str, Any]:
+        remote = jobs.remote
+        return {"ok": True, **await to_thread.run_sync(remote.find_conda)}
+
+    @app.post("/api/v1/remote/datasets/upload")
+    async def upload_dataset(local_path: str | None = None) -> dict[str, Any]:
+        # local_path 를 안 주면 사용자 PC 의 파일 선택창을 연다(백엔드가 로컬에서 돈다).
+        chosen = local_path or await to_thread.run_sync(select_dataset_archive)
+        if not chosen:
+            return {"ok": True, "selected": False, "dataset": None}
+        remote = jobs.remote
+        info = await to_thread.run_sync(lambda: remote.upload_dataset(chosen))
+        return {"ok": True, "selected": True, "dataset": info}
 
     @app.get("/api/v1/cluster/status")
     async def cluster_status(partition: str | None = None) -> dict[str, Any]:

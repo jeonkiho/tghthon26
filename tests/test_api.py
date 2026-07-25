@@ -391,3 +391,71 @@ def test_request_validation_uses_common_error_shape():
         )
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+# --- 웹에서 NAS 를 다루는 기능 (터미널 없이 첫 job 을 낼 수 있어야 한다) ---------
+# 예전에는 데이터 경로를 맨 입력창에 직접 타이핑해야 했고, 폼 기본값조차 서버에
+# 없는 경로였다. 목록·업로드·conda 탐지가 없으면 "터미널 없이"가 거짓말이 된다.
+
+def test_remote_ls_lists_entries_and_marks_archives(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/remote/ls").json()
+        assert body["ok"] is True
+        assert body["path"] == body["data_root"]
+        assert "parent" in body and "entries" in body
+        for entry in body["entries"]:
+            assert {"name", "path", "is_dir", "is_archive"} <= set(entry)
+            if entry["is_dir"]:
+                assert entry["size"] is None
+
+
+def test_remote_ls_hides_internal_job_folder():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/remote/ls").json()
+        # .seraph-gui 같은 내부 폴더가 사용자에게 보이면 안 된다.
+        assert all(not e["name"].startswith(".") for e in body["entries"])
+
+
+def test_dataset_upload_rejects_non_archive(tmp_path):
+    loose = tmp_path / "notes.txt"
+    loose.write_text("not an archive", encoding="utf-8")
+    app = create_app()
+    with TestClient(app) as client:
+        r = client.post(f"/api/v1/remote/datasets/upload?local_path={loose}")
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "DATASET_ARCHIVE_REQUIRED"
+
+
+def test_dataset_upload_lands_in_user_datasets_folder(tmp_path):
+    import tarfile
+
+    member = tmp_path / "a.txt"
+    member.write_text("hello", encoding="utf-8")
+    archive = tmp_path / "smoke.tar.gz"
+    with tarfile.open(archive, "w:gz") as t:
+        t.add(member, arcname="a.txt")
+
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.post(f"/api/v1/remote/datasets/upload?local_path={archive}").json()
+        assert body["ok"] is True and body["selected"] is True
+        target = body["dataset"]["path"]
+        assert target.endswith("/datasets/smoke.tar.gz")
+        # 업로드는 사용자 자기 폴더 안으로만 간다(샌드박스가 열리면 안 된다).
+        listed = client.get(f"/api/v1/remote/ls?path={target.rsplit('/', 1)[0]}").json()
+        names = {e["name"]: e for e in listed["entries"]}
+        assert "smoke.tar.gz" in names and names["smoke.tar.gz"]["is_archive"] is True
+
+
+def test_conda_discovery_reports_installs_and_envs():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/remote/conda").json()
+        assert body["ok"] is True
+        installs = body["installs"]
+        assert installs, "conda 설치를 하나도 못 찾으면 환경을 고를 수 없다"
+        for inst in installs:
+            assert {"root", "conda_sh", "is_personal", "envs"} <= set(inst)
+            assert inst["conda_sh"].endswith("/etc/profile.d/conda.sh")
