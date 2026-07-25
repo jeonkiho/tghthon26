@@ -28,7 +28,15 @@ class ConnectionManager:
 
     @property
     def connected(self) -> bool:
-        return self.connection is not None and self.remote is not None
+        if self.connection is None or self.remote is None:
+            return False
+        # 전송이 죽었는데 연결된 척하면, 화면은 멀쩡해 보이는데 누르는 것마다
+        # 무한 대기한다. is_active() 는 네트워크를 타지 않아 health 를 느리게 하지 않는다.
+        client = getattr(self.connection, "client", None)
+        transport = client.get_transport() if client is not None else None
+        if transport is not None and not transport.is_active():
+            return False
+        return True
 
     def connect(
         self,

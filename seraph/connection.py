@@ -143,6 +143,15 @@ def _default_ask_password(user, host, attempt):
         return None
 
 
+# 유휴 연결이 조용히 끊기는 걸 막는다. 세라프는 교외 접속(30080)이 흔해서 중간에
+# NAT·방화벽이 끼고, 그쪽이 유휴 세션을 먼저 버린다.
+KEEPALIVE_SECONDS = 30
+
+# SFTP 작업 상한. paramiko 의 SFTP 는 기본 타임아웃이 없어서, 전송이 죽으면
+# listdir/stat/put 이 영원히 블록된다. 무한 대기보다 실패가 낫다.
+SFTP_TIMEOUT_SECONDS = 30
+
+
 class SSHConnection:
     """paramiko 로 접속. 연결 하나를 열어두고 명령을 반복 실행한다.
 
@@ -207,6 +216,11 @@ class SSHConnection:
             attempts=password_attempts,
         )
         transport = self.client.get_transport()
+        if transport is not None:
+            # 유휴 연결을 서버·방화벽이 조용히 끊으면 paramiko 는 그걸 모르고,
+            # 다음 요청이 영원히 블록된다(화면에서는 "눌러도 아무 반응 없음"으로 보인다).
+            # keepalive 를 보내 연결을 살려두고, 죽었으면 빨리 알아채게 한다.
+            transport.set_keepalive(KEEPALIVE_SECONDS)
         self.username = (
             transport.get_username() if transport is not None
             else connect_args['username']

@@ -4,11 +4,32 @@ const ACTIVE = new Set(["SUBMITTED", "SUBMITTING", "PENDING", "RUNNING", "COMPLE
 const DASHBOARD_POLL_MS = 60_000;
 const ACTIVE_JOB_POLL_MS = 20_000;
 
+// 응답이 끝내 안 오면 사용자에게는 "눌러도 아무 일도 안 일어남"으로 보인다.
+// 그건 가장 나쁜 실패 방식이라, 기다리다 포기하고 이유를 말해준다.
+const API_TIMEOUT_MS = 45_000;
+
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-  });
+  const { timeoutMs = API_TIMEOUT_MS, ...init } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+    });
+  } catch (cause) {
+    const timedOut = cause?.name === "AbortError";
+    const error = new Error(timedOut
+      ? "서버가 제때 응답하지 않았습니다. SERAPH 연결이 끊겼을 수 있습니다 — 새로고침하거나 다시 연결해 주세요."
+      : "서버에 연결하지 못했습니다.");
+    error.code = timedOut ? "REQUEST_TIMEOUT" : "NETWORK_ERROR";
+    error.retryable = true;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(data?.error?.message || "요청을 처리하지 못했습니다.");

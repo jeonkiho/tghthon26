@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from seraph import connection as connection_module
 from seraph.connection import MockConnection
 
 from .errors import ApiError
@@ -289,6 +290,11 @@ class SSHRemote:
     def __init__(self, connection: Any):
         self.connection = connection
         self.sftp = connection.client.open_sftp()
+        # paramiko SFTP 는 기본 타임아웃이 없다. 전송이 죽으면 모든 호출이 영원히
+        # 블록되고, 화면에서는 "작업을 눌러도 아무 반응이 없다"로 나타난다.
+        channel = self.sftp.get_channel()
+        if channel is not None:
+            channel.settimeout(connection_module.SFTP_TIMEOUT_SECONDS)
         self._home = posixpath.normpath(self.sftp.normalize("."))
         self.username = connection.username
         self.data_root = f"{connection.config.data_root}/{self.username}"
