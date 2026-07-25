@@ -549,10 +549,14 @@ class SSHRemote:
     def job_state(self, job_id: str) -> dict[str, Any] | None:
         if not _JOB_ID.fullmatch(job_id):
             raise ApiError("INVALID_REQUEST", "Slurm 작업 ID 형식이 올바르지 않습니다.", 422)
+        # 끝난 job 은 Slurm 이 큐에서 치우고, 그때부터 squeue 는 rc=1
+        # "Invalid job id specified" 를 낸다. 오류가 아니라 "이미 끝났다"는 뜻이므로
+        # 빈 결과로 받아 아래 sacct 조회로 넘어간다.
         queue = self.connection.run_command(
             f'squeue -h -j {job_id} -o "%T|%R|%N|%M"',
             label="작업 상태",
             timeout=15,
+            check=False,
         ).strip()
         if queue:
             state, reason, nodes, elapsed = (queue.split("|") + ["", "", "", ""])[:4]

@@ -438,3 +438,56 @@ def test_advisor_undergrad_gets_the_real_partition():
     assert services.can_use_partition(adv, 'batch_ugrad_advisor_x') is True
     assert services.can_use_partition(adv, 'debug_ugrad_advisor_x') is True
     assert services.can_use_partition(adv, 'batch_ce_ugrad') is False
+
+
+# --- squeue 는 끝난 job 에 rc=1 을 낸다 (완료 작업을 못 여는 원인이었다) ------
+
+class _FakeChannel:
+    def __init__(self, rc): self._rc = rc
+    def recv_exit_status(self): return self._rc
+
+
+class _FakeStream:
+    def __init__(self, text, rc=0):
+        self._text = text.encode()
+        self.channel = _FakeChannel(rc)
+    def read(self): return self._text
+
+
+class _FakeClient:
+    """rc 를 마음대로 주는 가짜 SSH 클라이언트."""
+    def __init__(self, out, err, rc):
+        self._out, self._err, self._rc = out, err, rc
+        self.commands = []
+    def exec_command(self, command, timeout=None):
+        self.commands.append(command)
+        return None, _FakeStream(self._out, self._rc), _FakeStream(self._err)
+
+
+def _bare_ssh_connection(client):
+    from seraph.connection import SSHConnection
+    conn = SSHConnection.__new__(SSHConnection)   # __init__ 은 실제 접속을 한다
+    conn.client = client
+    return conn
+
+
+def test_run_command_raises_on_failure_by_default():
+    conn = _bare_ssh_connection(_FakeClient("", "boom", rc=1))
+    with pytest.raises(RuntimeError):
+        conn.run_command("false", label="테스트")
+
+
+def test_run_command_check_false_returns_empty_instead_of_raising():
+    """squeue 가 끝난 job 에 rc=1 을 내도 예외가 되면 안 된다.
+
+    이걸 예외로 던지는 바람에 완료된 작업을 클릭하면 500 INTERNAL_ERROR 가 났다.
+    """
+    conn = _bare_ssh_connection(
+        _FakeClient("", "slurm_load_jobs error: Invalid job id specified", rc=1))
+    assert conn.run_command("squeue -h -j 1", label="작업 상태", check=False) == ""
+
+
+def test_run_command_check_false_still_returns_output_on_success():
+    conn = _bare_ssh_connection(_FakeClient("RUNNING|None|moana-u1|0:05", "", rc=0))
+    out = conn.run_command("squeue -h -j 1", check=False)
+    assert out.startswith("RUNNING|")

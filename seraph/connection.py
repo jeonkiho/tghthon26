@@ -240,11 +240,19 @@ class SSHConnection:
             cfg.parse(f)
         return cfg.lookup(host)
 
-    def run_command(self, command, label='명령', timeout=30):
+    def run_command(self, command, label='명령', timeout=30, check=True):
+        """명령 실행. check=False 면 rc!=0 을 예외로 만들지 않고 빈 문자열을 준다.
+
+        "실패"가 정상 결과인 명령이 있다. squeue 는 큐에 없는 job 을 물으면
+        rc=1 "Invalid job id specified" 를 내는데, 그건 오류가 아니라 "그 job 은
+        이미 끝났다"는 뜻이다. 그걸 예외로 던지면 완료된 작업을 열 수 없게 된다.
+        """
         _, stdout, stderr = self.client.exec_command(command, timeout=timeout)
         out = stdout.read().decode()
         rc = stdout.channel.recv_exit_status()
         if rc != 0:
+            if not check:
+                return ''
             raise RuntimeError(f'{label} 실패 (rc={rc}): {stderr.read().decode().strip()}')
         return out
 
