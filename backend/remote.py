@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import stat
+import threading
 import tempfile
 import time
 from dataclasses import dataclass
@@ -302,6 +303,11 @@ class SSHRemote:
         channel = self.sftp.get_channel()
         if channel is not None:
             channel.settimeout(connection_module.SFTP_TIMEOUT_SECONDS)
+        # SFTPClient 는 채널 하나에 요청 ID 를 붙여 쓰는 구조라 스레드 안전하지 않다.
+        # 백엔드는 요청마다 워커 스레드를 쓰므로(예: 화면이 상세와 로그를 동시에 부른다)
+        # 잠그지 않으면 두 스레드가 서로의 응답을 가져가 채널이 엉키고 타임아웃까지 멈춘다.
+        # make_dir 이 upload_file/write_text 안에서 다시 호출되므로 재진입 가능해야 한다.
+        self._sftp_lock = threading.RLock()
         self._home = posixpath.normpath(self.sftp.normalize("."))
         self.username = connection.username
         self.data_root = f"{connection.config.data_root}/{self.username}"
@@ -344,14 +350,15 @@ class SSHRemote:
         서버가 권한을 강제하므로 못 읽는 곳은 그냥 실패한다.
         """
         clean = posixpath.normpath(path or self.data_root)
-        try:
-            attrs = self.sftp.listdir_attr(clean)
-        except OSError as exc:
-            raise ApiError(
-                "REMOTE_PATH_NOT_LISTABLE",
-                f"'{clean}' 를 열 수 없습니다. 경로나 권한을 확인하세요.",
-                status_code=404,
-            ) from exc
+        with self._sftp_lock:
+            try:
+                attrs = self.sftp.listdir_attr(clean)
+            except OSError as exc:
+                raise ApiError(
+                    "REMOTE_PATH_NOT_LISTABLE",
+                    f"'{clean}' 를 열 수 없습니다. 경로나 권한을 확인하세요.",
+                    status_code=404,
+                ) from exc
 
         entries = []
         for a in attrs:
@@ -453,47 +460,52 @@ class SSHRemote:
 
     def make_dir(self, path: str) -> None:
         clean = self._guard_job_path(path)
-        current = "/" if clean.startswith("/") else ""
-        for part in clean.split("/"):
-            if not part:
-                continue
-            current = posixpath.join(current, part)
-            try:
-                self.sftp.stat(current)
-            except OSError:
-                self.sftp.mkdir(current, mode=0o700)
+        with self._sftp_lock:
+            current = "/" if clean.startswith("/") else ""
+            for part in clean.split("/"):
+                if not part:
+                    continue
+                current = posixpath.join(current, part)
+                try:
+                    self.sftp.stat(current)
+                except OSError:
+                    self.sftp.mkdir(current, mode=0o700)
 
     def upload_file(self, local_path: str, remote_path: str) -> None:
         target = self._guard_job_path(remote_path)
         self.make_dir(posixpath.dirname(target))
-        self.sftp.put(local_path, target)
-        self.sftp.chmod(target, 0o600)
+        with self._sftp_lock:
+            self.sftp.put(local_path, target)
+            self.sftp.chmod(target, 0o600)
 
     def write_text(self, remote_path: str, text: str) -> None:
         target = self._guard_job_path(remote_path)
         self.make_dir(posixpath.dirname(target))
         tmp = target + ".tmp"
-        with self.sftp.file(tmp, "w") as handle:
-            handle.write(text)
-            handle.flush()
-        self.sftp.chmod(tmp, 0o600)
-        try:
-            self.sftp.remove(target)
-        except OSError:
-            pass
-        self.sftp.rename(tmp, target)
+        with self._sftp_lock:
+            with self.sftp.file(tmp, "w") as handle:
+                handle.write(text)
+                handle.flush()
+            self.sftp.chmod(tmp, 0o600)
+            try:
+                self.sftp.remove(target)
+            except OSError:
+                pass
+            self.sftp.rename(tmp, target)
 
     def read_text(self, remote_path: str, max_bytes: int = 1_000_000) -> str:
         target = self._guard_job_path(remote_path)
-        with self.sftp.file(target, "rb") as handle:
-            return handle.read(max_bytes).decode("utf-8", errors="replace")
+        with self._sftp_lock:
+            with self.sftp.file(target, "rb") as handle:
+                return handle.read(max_bytes).decode("utf-8", errors="replace")
 
     def list_directories(self, root: str) -> list[str]:
         clean = self._guard_job_path(root)
-        try:
-            attrs = self.sftp.listdir_attr(clean)
-        except OSError:
-            return []
+        with self._sftp_lock:
+            try:
+                attrs = self.sftp.listdir_attr(clean)
+            except OSError:
+                return []
         out = []
         for attr in attrs:
             # S_IFDIR bit mask without importing platform-specific stat helpers.
@@ -503,13 +515,14 @@ class SSHRemote:
 
     def tail(self, remote_path: str, max_bytes: int = 128_000) -> str:
         target = self._guard_job_path(remote_path)
-        try:
-            size = self.sftp.stat(target).st_size
-            with self.sftp.file(target, "rb") as handle:
-                handle.seek(max(0, size - max_bytes))
-                return handle.read().decode("utf-8", errors="replace")
-        except OSError:
-            return ""
+        with self._sftp_lock:
+            try:
+                size = self.sftp.stat(target).st_size
+                with self.sftp.file(target, "rb") as handle:
+                    handle.seek(max(0, size - max_bytes))
+                    return handle.read().decode("utf-8", errors="replace")
+            except OSError:
+                return ""
 
     def submit(self, remote_dir: str) -> str:
         clean = self._guard_job_path(remote_dir)
