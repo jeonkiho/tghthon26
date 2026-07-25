@@ -10,11 +10,13 @@ import re
 import shlex
 import shutil
 import stat
+import threading
 import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from seraph import connection as connection_module
 from seraph.connection import MockConnection
 
 from .errors import ApiError
@@ -171,6 +173,13 @@ class MockRemote:
         self.upload_file(str(source), target)
         return {"path": target, "name": source.name, "size": source.stat().st_size}
 
+    def delete_job_dir(self, path: str) -> None:
+        root = posixpath.normpath(self.jobs_root)
+        clean = posixpath.normpath(path)
+        if clean == root or not clean.startswith(root + "/"):
+            raise ApiError("REMOTE_PATH_NOT_ALLOWED", "작업 폴더만 삭제할 수 있습니다.", 403)
+        shutil.rmtree(self._local(clean), ignore_errors=True)
+
     def find_conda(self) -> dict[str, Any]:
         # mock 은 개인 설치 하나가 있는 것으로 흉내 낸다.
         return {"installs": [{
@@ -289,6 +298,16 @@ class SSHRemote:
     def __init__(self, connection: Any):
         self.connection = connection
         self.sftp = connection.client.open_sftp()
+        # paramiko SFTP 는 기본 타임아웃이 없다. 전송이 죽으면 모든 호출이 영원히
+        # 블록되고, 화면에서는 "작업을 눌러도 아무 반응이 없다"로 나타난다.
+        channel = self.sftp.get_channel()
+        if channel is not None:
+            channel.settimeout(connection_module.SFTP_TIMEOUT_SECONDS)
+        # SFTPClient 는 채널 하나에 요청 ID 를 붙여 쓰는 구조라 스레드 안전하지 않다.
+        # 백엔드는 요청마다 워커 스레드를 쓰므로(예: 화면이 상세와 로그를 동시에 부른다)
+        # 잠그지 않으면 두 스레드가 서로의 응답을 가져가 채널이 엉키고 타임아웃까지 멈춘다.
+        # make_dir 이 upload_file/write_text 안에서 다시 호출되므로 재진입 가능해야 한다.
+        self._sftp_lock = threading.RLock()
         self._home = posixpath.normpath(self.sftp.normalize("."))
         self.username = connection.username
         self.data_root = f"{connection.config.data_root}/{self.username}"
@@ -331,14 +350,15 @@ class SSHRemote:
         서버가 권한을 강제하므로 못 읽는 곳은 그냥 실패한다.
         """
         clean = posixpath.normpath(path or self.data_root)
-        try:
-            attrs = self.sftp.listdir_attr(clean)
-        except OSError as exc:
-            raise ApiError(
-                "REMOTE_PATH_NOT_LISTABLE",
-                f"'{clean}' 를 열 수 없습니다. 경로나 권한을 확인하세요.",
-                status_code=404,
-            ) from exc
+        with self._sftp_lock:
+            try:
+                attrs = self.sftp.listdir_attr(clean)
+            except OSError as exc:
+                raise ApiError(
+                    "REMOTE_PATH_NOT_LISTABLE",
+                    f"'{clean}' 를 열 수 없습니다. 경로나 권한을 확인하세요.",
+                    status_code=404,
+                ) from exc
 
         entries = []
         for a in attrs:
@@ -440,47 +460,52 @@ class SSHRemote:
 
     def make_dir(self, path: str) -> None:
         clean = self._guard_job_path(path)
-        current = "/" if clean.startswith("/") else ""
-        for part in clean.split("/"):
-            if not part:
-                continue
-            current = posixpath.join(current, part)
-            try:
-                self.sftp.stat(current)
-            except OSError:
-                self.sftp.mkdir(current, mode=0o700)
+        with self._sftp_lock:
+            current = "/" if clean.startswith("/") else ""
+            for part in clean.split("/"):
+                if not part:
+                    continue
+                current = posixpath.join(current, part)
+                try:
+                    self.sftp.stat(current)
+                except OSError:
+                    self.sftp.mkdir(current, mode=0o700)
 
     def upload_file(self, local_path: str, remote_path: str) -> None:
         target = self._guard_job_path(remote_path)
         self.make_dir(posixpath.dirname(target))
-        self.sftp.put(local_path, target)
-        self.sftp.chmod(target, 0o600)
+        with self._sftp_lock:
+            self.sftp.put(local_path, target)
+            self.sftp.chmod(target, 0o600)
 
     def write_text(self, remote_path: str, text: str) -> None:
         target = self._guard_job_path(remote_path)
         self.make_dir(posixpath.dirname(target))
         tmp = target + ".tmp"
-        with self.sftp.file(tmp, "w") as handle:
-            handle.write(text)
-            handle.flush()
-        self.sftp.chmod(tmp, 0o600)
-        try:
-            self.sftp.remove(target)
-        except OSError:
-            pass
-        self.sftp.rename(tmp, target)
+        with self._sftp_lock:
+            with self.sftp.file(tmp, "w") as handle:
+                handle.write(text)
+                handle.flush()
+            self.sftp.chmod(tmp, 0o600)
+            try:
+                self.sftp.remove(target)
+            except OSError:
+                pass
+            self.sftp.rename(tmp, target)
 
     def read_text(self, remote_path: str, max_bytes: int = 1_000_000) -> str:
         target = self._guard_job_path(remote_path)
-        with self.sftp.file(target, "rb") as handle:
-            return handle.read(max_bytes).decode("utf-8", errors="replace")
+        with self._sftp_lock:
+            with self.sftp.file(target, "rb") as handle:
+                return handle.read(max_bytes).decode("utf-8", errors="replace")
 
     def list_directories(self, root: str) -> list[str]:
         clean = self._guard_job_path(root)
-        try:
-            attrs = self.sftp.listdir_attr(clean)
-        except OSError:
-            return []
+        with self._sftp_lock:
+            try:
+                attrs = self.sftp.listdir_attr(clean)
+            except OSError:
+                return []
         out = []
         for attr in attrs:
             # S_IFDIR bit mask without importing platform-specific stat helpers.
@@ -490,13 +515,14 @@ class SSHRemote:
 
     def tail(self, remote_path: str, max_bytes: int = 128_000) -> str:
         target = self._guard_job_path(remote_path)
-        try:
-            size = self.sftp.stat(target).st_size
-            with self.sftp.file(target, "rb") as handle:
-                handle.seek(max(0, size - max_bytes))
-                return handle.read().decode("utf-8", errors="replace")
-        except OSError:
-            return ""
+        with self._sftp_lock:
+            try:
+                size = self.sftp.stat(target).st_size
+                with self.sftp.file(target, "rb") as handle:
+                    handle.seek(max(0, size - max_bytes))
+                    return handle.read().decode("utf-8", errors="replace")
+            except OSError:
+                return ""
 
     def submit(self, remote_dir: str) -> str:
         clean = self._guard_job_path(remote_dir)
@@ -540,13 +566,30 @@ class SSHRemote:
         command = f"cd {shlex.quote(clean)} && " + " ".join(shlex.quote(item) for item in args)
         return self.connection.run_command(command, label="srun 사전 점검", timeout=360)
 
+    def delete_job_dir(self, path: str) -> None:
+        """작업 폴더 하나를 지운다(메타데이터·업로드한 코드·로그).
+
+        삭제는 데이터셋 폴더까지 허용하는 _guard_job_path 를 쓰지 않는다. 실수로
+        데이터를 날리지 않게 작업 폴더 아래로만 막고, 작업 루트 자체도 거부한다.
+        """
+        root = posixpath.normpath(self.jobs_root)
+        clean = self._guard_write(path, [root], "작업 폴더만 삭제할 수 있습니다.")
+        if clean == root:
+            raise ApiError("REMOTE_PATH_NOT_ALLOWED", "작업 폴더 전체는 지울 수 없습니다.", 403)
+        self.connection.run_command(
+            f"rm -rf -- {shlex.quote(clean)}", label="작업 삭제", timeout=30)
+
     def job_state(self, job_id: str) -> dict[str, Any] | None:
         if not _JOB_ID.fullmatch(job_id):
             raise ApiError("INVALID_REQUEST", "Slurm 작업 ID 형식이 올바르지 않습니다.", 422)
+        # 끝난 job 은 Slurm 이 큐에서 치우고, 그때부터 squeue 는 rc=1
+        # "Invalid job id specified" 를 낸다. 오류가 아니라 "이미 끝났다"는 뜻이므로
+        # 빈 결과로 받아 아래 sacct 조회로 넘어간다.
         queue = self.connection.run_command(
             f'squeue -h -j {job_id} -o "%T|%R|%N|%M"',
             label="작업 상태",
             timeout=15,
+            check=False,
         ).strip()
         if queue:
             state, reason, nodes, elapsed = (queue.split("|") + ["", "", "", ""])[:4]
@@ -559,10 +602,16 @@ class SSHRemote:
                 "exit_code": None,
             }
 
+        # 회계 DB(slurmdbd)는 우리 통제 밖이고 실제로 가끔 죽는다. 실측 사례:
+        #   sacct: error: failed to open persistent connection to ariel-master:6819
+        #   sacct: error: Problem talking to the database: Connection timed out
+        # 그때 예외를 던지면 작업 상세가 통째로 500 이 된다 — 정작 메타데이터와 로그는
+        # 멀쩡한데도. 최신 상태만 포기하고(None) 저장된 상태를 그대로 보여주는 게 낫다.
         accounting = self.connection.run_command(
             f'sacct -n -P -j {job_id} -X -o "JobIDRaw,State,ExitCode,Elapsed,NodeList"',
             label="완료 작업 상태",
             timeout=30,
+            check=False,
         )
         for line in accounting.splitlines():
             parts = line.split("|")

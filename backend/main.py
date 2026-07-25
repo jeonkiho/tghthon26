@@ -340,6 +340,10 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
             )
         )
 
+    @app.delete("/api/v1/jobs/{local_job_id}")
+    async def delete_job(local_job_id: LOCAL_JOB_ID) -> dict[str, Any]:
+        return await to_thread.run_sync(lambda: jobs.delete(local_job_id))
+
     @app.post("/api/v1/jobs/{local_job_id}/preflight")
     async def preflight_job(local_job_id: LOCAL_JOB_ID) -> dict[str, Any]:
         return await to_thread.run_sync(lambda: jobs.preflight(local_job_id))

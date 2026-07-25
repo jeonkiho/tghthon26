@@ -841,6 +841,23 @@ class JobService:
             "truncated_to_bytes": max_bytes,
         }
 
+    def delete(self, local_job_id: str) -> dict[str, Any]:
+        """작업 기록을 목록에서 치운다(원격 작업 폴더째 삭제).
+
+        끝난 작업이 계속 쌓이면 목록이 못 쓰게 된다. 다만 아직 도는 작업을 지우면
+        Slurm 에는 job 이 남고 우리만 추적을 잃는다 — 그건 취소가 먼저다.
+        결과물(output_path)과 데이터셋은 이 폴더 밖이라 그대로 남는다.
+        """
+        meta = self._find(local_job_id)
+        if meta.get("status") in _ACTIVE_STATES:
+            raise ApiError(
+                "JOB_STILL_ACTIVE",
+                "진행 중인 작업입니다. 먼저 취소한 뒤 삭제하세요.",
+                status_code=409,
+            )
+        self.remote.delete_job_dir(meta["remote_dir"])
+        return {"ok": True, "deleted": local_job_id}
+
     def cancel(self, local_job_id: str) -> dict[str, Any]:
         meta = self._find(local_job_id)
         slurm_id = meta.get("slurm_job_id")
