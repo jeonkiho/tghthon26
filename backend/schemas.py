@@ -15,6 +15,13 @@ _USERNAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _HOST = re.compile(r"^[A-Za-z0-9.-]{1,255}$")
 _LOCAL_ID = re.compile(r"^[a-f0-9]{8,32}$")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
+_ENV_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_PYTHON_VERSION = re.compile(r"^[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]{1,2})?$")
+# 패키지·채널은 반드시 영문·숫자로 시작해야 한다. shlex.quote 로 감싸도 '-U' 같은
+# 값이 그대로 들어가면 conda/pip 가 그걸 **옵션으로** 읽는다. 첫 글자를 막는 게
+# 따옴표보다 확실하다.
+_PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+*!~<>=\[\],-]{0,127}$")
+_CHANNEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
 def _safe_relative(value: str, label: str) -> str:
@@ -188,4 +195,69 @@ class LocalJobId(StrictModel):
     def valid_local_id(cls, value: str) -> str:
         if not _LOCAL_ID.fullmatch(value):
             raise ValueError("작업 ID 형식이 올바르지 않습니다.")
+        return value
+
+
+class EnvSpec(StrictModel):
+    """웹에서 만들 개인 conda 환경.
+
+    mode 가 셋인 이유는 셋의 대가가 다르기 때문이다. scratch 는 파이썬 버전까지
+    자유롭지만 15분 이상 걸리고, clone 은 공용 환경의 torch 를 그대로 물려받는
+    대신 몇 분이면 끝나며, venv 는 몇 초지만 파이썬 버전을 바꿀 수 없다.
+    """
+
+    name: str
+    mode: str = "scratch"
+    python: str = "3.11"
+    source: str | None = Field(default=None, max_length=128)
+    conda_packages: list[str] = Field(default_factory=list, max_length=40)
+    pip_packages: list[str] = Field(default_factory=list, max_length=40)
+    channels: list[str] = Field(default_factory=lambda: ["conda-forge"], max_length=10)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        if not _ENV_NAME.fullmatch(value):
+            raise ValueError(
+                "환경 이름은 영문·숫자로 시작하고 영문, 숫자, 점, 밑줄, 하이픈만 "
+                "64자까지 쓸 수 있습니다.")
+        return value
+
+    @field_validator("mode")
+    @classmethod
+    def valid_mode(cls, value: str) -> str:
+        if value not in ("scratch", "clone", "venv"):
+            raise ValueError("만드는 방식은 scratch, clone, venv 중 하나여야 합니다.")
+        return value
+
+    @field_validator("python")
+    @classmethod
+    def valid_python(cls, value: str) -> str:
+        if not _PYTHON_VERSION.fullmatch(value):
+            raise ValueError("파이썬 버전은 3.11 또는 3.11.9 형식이어야 합니다.")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def valid_source(cls, value: str | None) -> str | None:
+        if value is not None and not _CONDA.fullmatch(value):
+            raise ValueError("원본 환경 이름 형식이 올바르지 않습니다.")
+        return value
+
+    @field_validator("conda_packages", "pip_packages")
+    @classmethod
+    def valid_packages(cls, value: list[str]) -> list[str]:
+        for package in value:
+            if not _PACKAGE.fullmatch(package):
+                raise ValueError(
+                    f"'{package}' 는 패키지 이름으로 쓸 수 없습니다. "
+                    "영문·숫자로 시작하는 이름과 버전만 적어주세요(예: torch==2.5.1).")
+        return value
+
+    @field_validator("channels")
+    @classmethod
+    def valid_channels(cls, value: list[str]) -> list[str]:
+        for channel in value:
+            if not _CHANNEL.fullmatch(channel):
+                raise ValueError(f"'{channel}' 는 채널 이름으로 쓸 수 없습니다.")
         return value

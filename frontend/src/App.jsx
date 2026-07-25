@@ -60,6 +60,8 @@ function Icon({ name, size = 20 }) {
     book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>,
     bell: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
     logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></>,
+    box: <><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></>,
+    trash: <><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -293,6 +295,276 @@ function NasBrowser({ open, onClose, onPick, onUpload, uploading }) {
   </div>;
 }
 
+// 빌드는 20분까지 걸린다. 새로고침하거나 실수로 탭을 닫아도 진행 상황을 다시
+// 찾을 수 있어야 한다 — 서버에서는 계속 돌고 있는데 화면만 잊어버리면 곤란하다.
+const ENV_BUILD_KEY = "seraph_env_build";
+const ENV_BUILD_POLL_MS = 3000;
+
+function splitList(text) {
+  return text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+const ENV_SOURCE_LABELS = { personal: "내가 만든 환경", "personal-install": "내 설치", shared: "공용" };
+
+const ENV_MODES = [
+  { id: "clone", label: "기존 환경 복제", detail: "공용 환경의 torch 를 그대로 물려받고 패키지만 추가합니다. 몇 분." },
+  { id: "scratch", label: "처음부터 만들기", detail: "파이썬·torch·CUDA 버전을 전부 고릅니다. 15분 이상 걸릴 수 있습니다." },
+  { id: "venv", label: "venv (가장 빠름)", detail: "기존 파이썬 위에 얹습니다. 몇 초. 파이썬 버전은 바꿀 수 없습니다." },
+];
+
+// 환경 화면. 공용 설치는 읽기 전용이라 pip 하나 넣을 수 없었고, 원하는 torch
+// 버전이 없는 순간 학생은 이 도구를 닫고 터미널을 열었다. 그 마지막 구멍을 막는다.
+function EnvsPage({ report, onEnvsChanged }) {
+  const [tools, setTools] = useState(null);
+  const [envs, setEnvs] = useState([]);
+  const [build, setBuild] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    mode: "clone", name: "", python: "3.11", source: "",
+    condaText: "", pipText: "", channelsText: "conda-forge",
+  });
+
+  const loadEnvs = useCallback(async () => {
+    try {
+      const data = await api("/api/v1/envs");
+      setEnvs(data.envs || []);
+      setForm((old) => old.source ? old : { ...old, source: (data.envs || [])[0]?.name || "" });
+      onEnvsChanged?.(data.envs || []);
+      // 서버가 아직 돌리고 있는 빌드가 있으면 이어서 보여준다. 브라우저에 저장된
+      // 번호만 믿으면, 다른 브라우저로 열거나 저장소를 지웠을 때 20분짜리 빌드가
+      // 화면에서 통째로 사라진다.
+      const running = (data.running_builds || [])[0];
+      if (running) {
+        setBuild((old) => old?.build_id ? old : { ...running, state: "running", log: "" });
+      }
+    } catch (err) { report(err); }
+  }, [report, onEnvsChanged]);
+
+  useEffect(() => {
+    loadEnvs();
+    // 점검은 df·curl 을 돌리므로 몇 초 걸린다. 목록과 따로 부른다.
+    api("/api/v1/envs/tools").then(setTools).catch(report);
+    try {
+      const saved = localStorage.getItem(ENV_BUILD_KEY);
+      if (saved) setBuild({ build_id: saved, state: "running", log: "" });
+    } catch { /* 저장소를 못 읽어도 화면은 떠야 한다 */ }
+  }, [loadEnvs, report]);
+
+  // 진행 중인 빌드만 폴링한다. 끝나면 목록을 다시 불러 새 환경이 바로 보이게 한다.
+  useEffect(() => {
+    if (!build?.build_id || build.state !== "running") return undefined;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const data = await api(`/api/v1/envs/builds/${build.build_id}`);
+        if (stop) return;
+        setBuild(data.build);
+        if (data.build.state !== "running") {
+          try { localStorage.removeItem(ENV_BUILD_KEY); } catch { /* 무시 */ }
+          loadEnvs();
+        }
+      } catch (err) {
+        if (stop) return;
+        // 백엔드 재시작으로 기록을 못 찾으면 계속 물어봐야 소용없다.
+        setBuild((old) => ({ ...(old || {}), state: "failed", message: err.message }));
+        try { localStorage.removeItem(ENV_BUILD_KEY); } catch { /* 무시 */ }
+      }
+    };
+    const timer = setInterval(tick, ENV_BUILD_POLL_MS);
+    tick();
+    return () => { stop = true; clearInterval(timer); };
+  }, [build?.build_id, build?.state, loadEnvs]);
+
+  const create = async () => {
+    setBusy(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        mode: form.mode,
+        python: form.python,
+        source: form.mode === "scratch" ? null : (form.source || null),
+        conda_packages: form.mode === "scratch" ? splitList(form.condaText) : [],
+        pip_packages: splitList(form.pipText),
+        channels: form.mode === "scratch" ? splitList(form.channelsText) : ["conda-forge"],
+      };
+      const data = await api("/api/v1/envs", { method: "POST", body: JSON.stringify(payload) });
+      setBuild(data.build);
+      try { localStorage.setItem(ENV_BUILD_KEY, data.build.build_id); } catch { /* 무시 */ }
+    } catch (err) { report(err); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (name) => {
+    if (!window.confirm(`'${name}' 환경을 지웁니다. 이 환경을 쓰는 작업은 더 이상 실행되지 않습니다.`)) return;
+    setBusy(true);
+    try { await api(`/api/v1/envs/${encodeURIComponent(name)}`, { method: "DELETE" }); await loadEnvs(); }
+    catch (err) { report(err); }
+    finally { setBusy(false); }
+  };
+
+  const applyPreset = (preset) => setForm((old) => ({
+    ...old, mode: "scratch", python: preset.python,
+    condaText: preset.conda_packages.join(" "), channelsText: preset.channels.join(" "),
+  }));
+
+  const mine = envs.filter((e) => e.source === "personal");
+  const others = envs.filter((e) => e.source !== "personal");
+  const running = build?.state === "running";
+  const nameTaken = envs.some((e) => e.name === form.name.trim());
+  const canSubmit = !busy && !running && form.name.trim() && !nameTaken
+    && (form.mode === "scratch" || form.source) && tools?.can_create !== false;
+
+  return <section className="page envs-page">
+    <EnvReadiness tools={tools}/>
+
+    <div className="envs-grid">
+      <article className="panel">
+        <div className="panel-head">
+          <div><p className="eyebrow">MY ENVIRONMENTS</p><h2>내 환경</h2></div>
+          <button className="secondary compact" onClick={loadEnvs} disabled={busy}><Icon name="refresh" size={16}/> 새로고침</button>
+        </div>
+        {mine.length ? <ul className="env-list">{mine.map((env) => <li key={env.name}>
+          <div><strong>{env.name}</strong><small>{env.python || env.kind} · {env.prefix}</small></div>
+          <button className="icon-button" onClick={() => remove(env.name)} disabled={busy} title="이 환경 지우기"><Icon name="trash" size={16}/></button>
+        </li>)}</ul>
+          : <div className="empty-mini"><Icon name="box" size={20}/><span>아직 직접 만든 환경이 없습니다.</span></div>}
+
+        <p className="eyebrow env-shared-head">읽기 전용 · 공용/기존 설치</p>
+        {others.length ? <ul className="env-list muted-list">{others.map((env) => <li key={env.name}>
+          <div><strong>{env.name}</strong><small>{env.prefix}</small></div>
+          <span className="env-tag">{env.source === "shared" ? "공용" : "내 설치"}</span>
+        </li>)}</ul>
+          : <div className="empty-mini"><span>공용 환경을 찾지 못했습니다.</span></div>}
+      </article>
+
+      <article className="panel">
+        <div className="panel-head"><div><p className="eyebrow">NEW ENVIRONMENT</p><h2>새 환경 만들기</h2></div></div>
+
+        <div className="env-modes">{ENV_MODES.map((mode) => <button
+          key={mode.id}
+          className={`env-mode ${form.mode === mode.id ? "active" : ""}`}
+          onClick={() => setForm({ ...form, mode: mode.id })}
+          disabled={running}>
+          <strong>{mode.label}</strong><span>{mode.detail}</span>
+        </button>)}</div>
+
+        <Field label="환경 이름" hint={nameTaken ? "같은 이름이 이미 있습니다." : "작업 만들 때 이 이름으로 고릅니다"}>
+          <input value={form.name} placeholder="예: torch25" disabled={running}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}/>
+        </Field>
+
+        {form.mode === "scratch" ? <>
+          <Field label="파이썬 버전">
+            <select value={form.python} disabled={running} onChange={(e) => setForm({ ...form, python: e.target.value })}>
+              {(tools?.python_versions || ["3.11"]).map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </Field>
+          {tools?.presets?.length ? <div className="env-presets">
+            <p className="eyebrow">자주 쓰는 조합</p>
+            <div className="env-preset-row">{tools.presets.map((preset) => <button key={preset.id}
+              className="secondary compact" disabled={running} onClick={() => applyPreset(preset)}
+              title={preset.note}>{preset.label}</button>)}</div>
+          </div> : null}
+          <Field label="conda 패키지" hint="공백으로 구분 · 예: pytorch torchvision pytorch-cuda=12.1">
+            <input value={form.condaText} disabled={running}
+              onChange={(e) => setForm({ ...form, condaText: e.target.value })}/>
+          </Field>
+          <Field label="채널" hint="pytorch·nvidia 채널이 있어야 CUDA 빌드를 받습니다">
+            <input value={form.channelsText} disabled={running}
+              onChange={(e) => setForm({ ...form, channelsText: e.target.value })}/>
+          </Field>
+        </> : <Field label={form.mode === "clone" ? "복제할 환경" : "기반 파이썬"}
+          hint={form.mode === "clone" ? "이 환경의 패키지를 그대로 복사합니다" : "이 환경의 파이썬으로 venv 를 만듭니다"}>
+          <select value={form.source} disabled={running} onChange={(e) => setForm({ ...form, source: e.target.value })}>
+            <option value="">환경을 고르세요</option>
+            {envs.map((env) => <option key={env.name} value={env.name}>{env.name}</option>)}
+          </select>
+        </Field>}
+
+        <Field label="pip 패키지 (선택)" hint="공백으로 구분 · 예: wandb timm==1.0.9">
+          <input value={form.pipText} disabled={running}
+            onChange={(e) => setForm({ ...form, pipText: e.target.value })}/>
+        </Field>
+
+        <button className="primary full" onClick={create} disabled={!canSubmit}>
+          {running ? "만드는 중…" : "이 환경 만들기"} <Icon name="arrow" size={17}/>
+        </button>
+        <p className="muted env-note">
+          서버에서 백그라운드로 만듭니다. 창을 닫아도 계속되고, 다시 열면 진행 상황이 이어집니다.
+        </p>
+      </article>
+    </div>
+
+    {build && <article className="panel env-build-panel">
+      <div className="panel-head">
+        <div><p className="eyebrow">BUILD LOG</p><h2>{build.name || "환경 만들기"}</h2></div>
+        <StatusPill status={{ running: "RUNNING", succeeded: "COMPLETED", failed: "FAILED" }[build.state] || "PENDING"}/>
+      </div>
+      {build.message && <p className="muted">{build.message}</p>}
+      <pre className="logs">{build.log || "로그를 기다리는 중입니다…"}</pre>
+      {build.state !== "running" && <button className="secondary compact" onClick={() => setBuild(null)}>닫기</button>}
+    </article>}
+  </section>;
+}
+
+// 점검 결과. "가능/불가"를 먼저 말하고 근거를 보여준다 — 추측으로 20분을 태우지
+// 않게 하려고 만든 화면이라, 근거를 감추면 존재 이유가 없어진다.
+function EnvReadiness({ tools }) {
+  if (!tools) return <article className="panel env-probe"><p className="muted">서버에서 환경 만들기 가능 여부를 확인하는 중입니다…</p></article>;
+  const gib = tools.avail_bytes ? `${(tools.avail_bytes / 1024 ** 3).toFixed(0)}GB` : "확인 불가";
+  return <article className={`panel env-probe ${tools.can_create ? "ok" : "bad"}`}>
+    <div className="panel-head">
+      <div><p className="eyebrow">READINESS</p><h2>{tools.can_create ? "이 서버에서 환경을 만들 수 있습니다" : "지금은 환경을 만들 수 없습니다"}</h2></div>
+      <Icon name={tools.can_create ? "check" : "warn"} size={22}/>
+    </div>
+    {tools.blockers?.map((text) => <p key={text} className="env-blocker"><Icon name="warn" size={15}/> {text}</p>)}
+    {tools.warnings?.map((text) => <p key={text} className="env-warning"><Icon name="warn" size={15}/> {text}</p>)}
+    <dl className="detail-grid env-facts">
+      <div><dt>conda</dt><dd>{tools.conda_version || "찾지 못함"}</dd></div>
+      <div><dt>만들 위치</dt><dd>{tools.envs_root}</dd></div>
+      <div><dt>{tools.filesystem || "파일시스템"} 여유</dt><dd>{gib}</dd></div>
+      <div><dt>로그인 노드 부하</dt><dd>{tools.loadavg || "—"}{tools.cpus ? ` · ${tools.cpus} CPU` : ""}</dd></div>
+      {(tools.network || []).map((net) => <div key={net.url}>
+        <dt>{net.url.includes("pypi") ? "PyPI" : "conda 저장소"}</dt>
+        <dd className={net.ok ? "net-ok" : "net-bad"}>{net.ok ? `연결됨 (${net.status})` : "닿지 않음"}</dd>
+      </div>)}
+    </dl>
+  </article>;
+}
+
+// 알림. 백엔드가 서버를 지켜보다 끝난 일을 알려주면, 화면은 그걸 브라우저 알림과
+// 인앱 배너로 보여준다. 폴링을 pageVisible 로 막지 않는 이유는 명확하다 —
+// 탭이 가려져 있을 때가 바로 알림이 필요한 순간이다.
+const EVENTS_POLL_MS = 15_000;
+
+function canNotify() {
+  return typeof Notification !== "undefined" && Notification.permission === "granted";
+}
+
+function AlertBell({ state, onEnable }) {
+  if (state === "unsupported") return null;
+  if (state === "granted") {
+    return <div className="alert-bell on" title="작업·환경이 끝나면 알림을 보냅니다"><Icon name="bell" size={18}/></div>;
+  }
+  const denied = state === "denied";
+  return <button className="alert-bell" onClick={onEnable} disabled={denied}
+    title={denied ? "브라우저에서 이 사이트의 알림을 차단했습니다. 주소창 왼쪽 자물쇠에서 허용으로 바꿔주세요." : "작업이 끝나면 알려드립니다"}>
+    <Icon name="bell" size={18}/><span>{denied ? "알림 차단됨" : "알림 켜기"}</span>
+  </button>;
+}
+
+// 브라우저 알림 권한이 없어도 무언가는 보여야 한다. 권한이 있으면 OS 알림이
+// 뜨고, 이 배너는 화면을 보고 있던 사람을 위한 것이다.
+function AlertBanner({ alerts, onDismiss }) {
+  if (!alerts.length) return null;
+  return <div className="alert-stack">{alerts.map((alert) => <div key={alert.id}
+    className={`alert-card ${alert.ok ? "ok" : "bad"}`} role="status">
+    <Icon name={alert.ok ? "check" : "warn"} size={18}/>
+    <div><strong>{alert.title}</strong><p>{alert.body}</p></div>
+    <button onClick={() => onDismiss(alert.id)} aria-label="닫기"><Icon name="close" size={16}/></button>
+  </div>)}</div>;
+}
+
 function ErrorToast({ error, onClose }) {
   if (!error) return null;
   return <div className="toast" role="alert">
@@ -307,6 +579,17 @@ const NODE_SORTS = {
   name:  { label: "이름순", cmp: null },
   free:  { label: "사용 가능 GPU 많은 순", cmp: (a, b) => (b.usable_gpus ?? 0) - (a.usable_gpus ?? 0) },
   total: { label: "전체 GPU 많은 순",      cmp: (a, b) => (b.total_gpus ?? 0) - (a.total_gpus ?? 0) },
+};
+
+// 탭마다 [작은 영문 라벨, 제목]. 삼항 연산자를 일곱 번 잇는 것보다 한 줄 더하기 쉽다.
+const PAGE_TITLES = {
+  dashboard: ["CLUSTER OVERVIEW", "클러스터 대시보드"],
+  new: ["JOB WIZARD", "새 GPU 작업"],
+  jobs: ["JOB MONITOR", "내 작업"],
+  envs: ["ENVIRONMENTS", "파이썬 환경"],
+  history: ["JOB HISTORY", "완료 작업 이력"],
+  tutorial: ["GUIDE", "세라프 사용법"],
+  notices: ["ANNOUNCEMENTS", "공지사항"],
 };
 
 const blankForm = {
@@ -350,7 +633,8 @@ export default function App() {
   // NAS 데이터 선택·업로드. 서버 경로를 타이핑하지 않아도 되게 한다.
   const [nasOpen, setNasOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [condaInstalls, setCondaInstalls] = useState([]);
+  // 작업 폼의 환경 드롭다운. '환경' 화면에서 새로 만들면 여기로도 바로 올라온다.
+  const [envOptions, setEnvOptions] = useState([]);
 
   // 노드 표 정렬 기준. 한 번 고르면 다음에 들어와도 그대로 쓰도록 저장한다.
   const [nodeSort, setNodeSort] = useState(() => {
@@ -360,6 +644,53 @@ export default function App() {
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
 
   const report = useCallback((err) => setError({ code: err.code, message: err.message }), []);
+
+  // --- 알림 -----------------------------------------------------------------
+  const [alerts, setAlerts] = useState([]);
+  const [notifyState, setNotifyState] = useState(
+    () => typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+  // 커서는 ref 다. 폴링 타이머를 다시 만들지 않으면서 마지막으로 본 번호를 기억해야 한다.
+  const eventCursor = useRef(null);
+
+  const enableNotifications = useCallback(async () => {
+    if (typeof Notification === "undefined") return;
+    try { setNotifyState(await Notification.requestPermission()); }
+    catch { setNotifyState(Notification.permission); }
+  }, []);
+
+  const dismissAlert = useCallback(
+    (id) => setAlerts((items) => items.filter((item) => item.id !== id)), []);
+
+  useEffect(() => {
+    if (!health?.seraph_reachable) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      const cursor = eventCursor.current;
+      const query = new URLSearchParams({ can_notify: String(canNotify()) });
+      if (cursor) { query.set("since", cursor.id); query.set("session", cursor.session); }
+      let data;
+      // 알림 폴링이 실패했다고 화면에 오류를 띄우지는 않는다. 이건 배경 작업이고,
+      // 사용자가 지금 하려던 일과 아무 상관이 없다.
+      try { data = await api(`/api/v1/events?${query}`, { timeoutMs: 10_000 }); }
+      catch { return; }
+      if (stopped) return;
+      // 첫 폴링은 기준점만 잡는다. 브라우저가 꺼져 있는 동안 쌓인 것까지 쏟아내면
+      // 이미 OS 알림으로 받은 걸 또 받게 된다.
+      const baseline = !cursor || data.reset;
+      eventCursor.current = { session: data.session, id: data.latest_id };
+      if (baseline || !data.events?.length) return;
+      setAlerts((items) => [...data.events, ...items].slice(0, 5));
+      if (canNotify()) {
+        for (const event of data.events) {
+          try { new Notification(event.title, { body: event.body, tag: `seraph-${event.id}` }); }
+          catch { /* 알림을 못 띄워도 인앱 배너는 남는다 */ }
+        }
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, EVENTS_POLL_MS);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [health?.seraph_reachable]);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -398,8 +729,8 @@ export default function App() {
       api("/api/v1/clusters").then(setClusterInfo).catch(() => {});  // 정적 안내(라우팅 표 포함), 1회만
       if (data.seraph_reachable) {
         await Promise.all([loadDashboard(), loadJobs()]);
-        // conda 설치는 잘 안 바뀐다. 실패해도 폼은 그대로 쓸 수 있어야 한다.
-        api("/api/v1/remote/conda").then((c) => setCondaInstalls(c.installs || [])).catch(() => {});
+        // 환경 목록은 잘 안 바뀐다. 실패해도 폼은 그대로 쓸 수 있어야 한다.
+        api("/api/v1/envs").then((c) => setEnvOptions(c.envs || [])).catch(() => {});
       }
     } catch (err) { report(err); }
   }, [loadDashboard, loadJobs, report]);
@@ -565,7 +896,7 @@ export default function App() {
   });
 
   const nav = [
-    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
+    ["dashboard", "grid", "대시보드"], ["new", "plus", "새 작업"], ["jobs", "jobs", "내 작업"], ["envs", "box", "환경"], ["history", "history", "완료 이력"], ["tutorial", "book", "튜토리얼"], ["notices", "bell", "공지"],
   ];
   // 사이드바 배지는 "지금 신경 쓸 게 있나"를 뜻한다. 전체 개수를 띄우면 끝난 작업이
   // 남아 있는 한 영원히 사라지지 않아서, 배지가 아무 의미도 갖지 못한다.
@@ -591,8 +922,8 @@ export default function App() {
 
     <main>
       <header>
-        <div><p className="eyebrow">{tab === "dashboard" ? "CLUSTER OVERVIEW" : tab === "new" ? "JOB WIZARD" : tab === "history" ? "JOB HISTORY" : tab === "tutorial" ? "GUIDE" : tab === "notices" ? "ANNOUNCEMENTS" : "JOB MONITOR"}</p><h1>{tab === "dashboard" ? "클러스터 대시보드" : tab === "new" ? "새 GPU 작업" : tab === "history" ? "완료 작업 이력" : tab === "tutorial" ? "세라프 사용법" : tab === "notices" ? "공지사항" : "내 작업"}</h1></div>
-        <div className="header-actions"><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading} title="새로고침"><Icon name="refresh"/></button>{health?.seraph_reachable && health?.mode === "ssh" && <button className="icon-button" onClick={disconnect} disabled={loading} title="로그아웃 (연결 해제)"><Icon name="logout"/></button>}</div>
+        <div><p className="eyebrow">{(PAGE_TITLES[tab] || PAGE_TITLES.jobs)[0]}</p><h1>{(PAGE_TITLES[tab] || PAGE_TITLES.jobs)[1]}</h1></div>
+        <div className="header-actions"><AlertBell state={notifyState} onEnable={enableNotifications}/><div className="user-chip"><span>{(me?.user || "U").slice(0, 1).toUpperCase()}</span><div><strong>{me?.user || "연결 대기"}</strong><small>{me?.account || health?.mode || "local"}</small></div></div><button className="icon-button" onClick={refreshAll} disabled={loading} title="새로고침"><Icon name="refresh"/></button>{health?.seraph_reachable && health?.mode === "ssh" && <button className="icon-button" onClick={disconnect} disabled={loading} title="로그아웃 (연결 해제)"><Icon name="logout"/></button>}</div>
       </header>
 
       {tab === "dashboard" && <section className="page dashboard-page">
@@ -650,13 +981,15 @@ export default function App() {
             <div className="field-grid"><Field label="작업 이름"><input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})}/></Field><Field label="진입 파일"><input value={form.entrypoint} onChange={(e) => setForm({...form, entrypoint: e.target.value})}/></Field></div>
             <Field label="로컬 코드 경로" hint="코드 폴더, .py, .zip, .tar.gz"><div className="path-input"><input placeholder="예: C:\Users\me\project" value={form.local_code_path} onChange={(e) => setForm({...form, local_code_path: e.target.value})}/><button onClick={() => chooseCode("directory")}><Icon name="folder" size={17}/> 폴더</button><button onClick={() => chooseCode("file")}>파일</button></div></Field>
             <Field label="실행 인자" hint="한 줄에 인자 하나 · {dataset}, {output} 사용 가능"><textarea rows="5" value={form.argsText} onChange={(e) => setForm({...form, argsText: e.target.value})}/></Field>
-            <Field label="Conda 환경 (선택)" hint={condaInstalls.length ? `서버에서 찾은 설치 ${condaInstalls.length}곳` : "서버에서 conda 설치를 찾지 못했습니다"}>
-              {condaInstalls.some((i) => (i.envs || []).length)
+            <Field label="파이썬 환경 (선택)" hint={envOptions.length ? "원하는 버전이 없으면 '환경' 화면에서 직접 만들 수 있습니다" : "서버에서 환경을 찾지 못했습니다"}>
+              {envOptions.length
                 ? <select value={form.conda_env} onChange={(e) => setForm({...form, conda_env: e.target.value})}>
                     <option value="">사용 안 함 (기본 python)</option>
-                    {condaInstalls.map((inst) => (inst.envs || []).map((env) => (
-                      <option key={`${inst.root}/${env}`} value={env}>{env} — {inst.is_personal ? "내 설치" : "공용"}</option>
-                    )))}
+                    {envOptions.map((env) => (
+                      <option key={env.prefix} value={env.name}>
+                        {env.name} — {ENV_SOURCE_LABELS[env.source] || "공용"}
+                      </option>
+                    ))}
                   </select>
                 : <input placeholder="예: pytorch1.12.1_p38" value={form.conda_env} onChange={(e) => setForm({...form, conda_env: e.target.value})}/>}
             </Field>
@@ -692,6 +1025,8 @@ export default function App() {
         <article className="panel jobs-panel"><div className="panel-head"><div><p className="eyebrow">SLURM JOBS</p><h2>작업별 실행 상태</h2></div><button className="secondary compact" onClick={loadJobs}><Icon name="refresh" size={16}/> 새로고침</button></div><JobTable jobs={jobs} onOpen={openJob}/></article>
         {selected && <DrawerShell onClose={() => setSelected(null)} label="작업 상세"><div className="drawer-head"><div><p className="eyebrow">JOB DETAIL</p><h2>{selected.job.job_name}</h2></div><button onClick={() => setSelected(null)}><Icon name="close"/></button></div><div className="drawer-status"><StatusPill status={selected.job.status}/><span>Slurm #{selected.job.slurm_job_id || "미제출"}</span></div><dl className="detail-grid"><div><dt>파티션</dt><dd>{selected.job.partition}</dd></div><div><dt>노드</dt><dd>{selected.job.node || "자동"}</dd></div><div><dt>GPU</dt><dd>{selected.job.gpus}개</dd></div><div><dt>시간 제한</dt><dd>{selected.job.time_limit}</dd></div><div className="wide"><dt>데이터</dt><dd>{selected.job.dataset_path}</dd></div><div className="wide"><dt>결과</dt><dd>{selected.job.output_path}</dd></div></dl><div className="log-tabs"><span><Icon name="terminal" size={17}/> stdout · 수동 갱신</span><div><button onClick={() => refreshJobLogs(selected.job.local_job_id)}><Icon name="refresh" size={15}/> 로그 갱신</button><button onClick={() => navigator.clipboard.writeText(logs?.stdout || "")}><Icon name="copy" size={15}/> 복사</button></div></div><pre className="logs">{logs?.stdout || "아직 출력 로그가 없습니다."}{logs?.stderr ? `\n\n[stderr]\n${logs.stderr}` : ""}</pre>{ACTIVE.has(selected.job.status) && selected.job.slurm_job_id && <button className="danger-button" onClick={() => cancel(selected.job.local_job_id)}>작업 취소</button>}{!ACTIVE.has(selected.job.status) && <button className="secondary full drawer-delete" onClick={() => removeJob(selected.job.local_job_id)}><Icon name="close" size={15}/> 이 작업 기록 삭제</button>}</DrawerShell>}
       </section>}
+
+      {tab === "envs" && <EnvsPage report={report} onEnvsChanged={setEnvOptions}/>}
 
       {tab === "history" && <section className="page history-page">
         <div className="welcome-strip history-strip"><div><span className="live-dot"/>SACCT · {historyDays}일</div><p>{jobHistory?.headline || "기간을 선택하면 완료된 작업 이력을 조회합니다."}</p><div className="history-controls">{[1,7,30,60].map((d) => <button key={d} className={d === historyDays ? "on" : ""} onClick={() => loadHistory(d)}>{d}일</button>)}<button className="hs-refresh" onClick={() => loadHistory(historyDays)} title="다시 불러오기"><Icon name="refresh" size={15}/></button></div></div>
@@ -729,6 +1064,7 @@ export default function App() {
     <NasBrowser open={nasOpen} onClose={() => setNasOpen(false)} onPick={pickDataset} onUpload={uploadDataset} uploading={uploading}/>
     {health && !health.seraph_reachable && <ConnectCard mode={health.mode} clusters={clusterInfo?.clusters} routing={clusterInfo?.routing} health={health} loading={loading} onConnect={connect}/>}
     {loading && <div className="loading-line"/>}
+    <AlertBanner alerts={alerts} onDismiss={dismissAlert}/>
     <ErrorToast error={error} onClose={() => setError(null)}/>
   </div>;
 }

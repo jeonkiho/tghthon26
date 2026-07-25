@@ -1,6 +1,7 @@
 import asyncio
 import io
 import tarfile
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from backend import dependencies
 from backend.cache import SnapshotCache
 from backend.main import create_app
+from backend.remote import PACKAGE_HOSTS
 from backend.schemas import ConnectRequest
 from seraph import config as config_module
 from seraph.connection import AuthError
@@ -508,3 +510,288 @@ def test_delete_refuses_while_job_is_active(tmp_path):
         assert blocked.json()["error"]["code"] == "JOB_STILL_ACTIVE"
         # 목록에는 그대로 남아 있어야 한다
         assert any(j["local_job_id"] == local_id for j in client.get("/api/v1/jobs").json()["jobs"])
+
+
+# --- 웹에서 파이썬 환경 만들기 -------------------------------------------------
+# 공용 설치(/data/opt/anaconda3)는 읽기 전용이라 pip 하나 넣을 수 없다. 원하는
+# torch 버전이 없는 순간 학생은 이 도구를 닫고 터미널을 열었다 — 마지막 구멍이다.
+
+def _wait_for_build(client, build_id, tries=30):
+    for _ in range(tries):
+        build = client.get(f"/api/v1/envs/builds/{build_id}").json()["build"]
+        if build["state"] != "running":
+            return build
+        time.sleep(0.3)
+    raise AssertionError("빌드가 끝나지 않았습니다")
+
+
+def test_env_tools_reports_readiness_with_evidence():
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/envs/tools").json()
+        assert body["can_create"] is True
+        assert body["blockers"] == []
+        # "가능하다"만 말하고 근거를 감추면, 실패했을 때 아무도 이유를 모른다.
+        assert body["conda_version"] and body["envs_root"].endswith("/envs")
+        assert body["python_versions"] and body["presets"]
+        assert [n["url"] for n in body["network"]] == list(PACKAGE_HOSTS)
+        assert all(n["ok"] for n in body["network"])
+
+
+def test_env_create_build_and_delete_round_trip():
+    app = create_app()
+    with TestClient(app) as client:
+        created = client.post("/api/v1/envs", json={
+            "name": "torch25", "mode": "scratch", "python": "3.11",
+            "conda_packages": ["pytorch", "pytorch-cuda=12.1"],
+            "channels": ["pytorch", "nvidia"], "pip_packages": ["wandb"],
+        })
+        assert created.status_code == 200
+        build = created.json()["build"]
+        assert build["prefix"].endswith("/envs/torch25")
+
+        done = _wait_for_build(client, build["build_id"])
+        assert done["state"] == "succeeded"
+
+        names = [e["name"] for e in client.get("/api/v1/envs").json()["envs"]]
+        assert "torch25" in names
+        assert client.delete("/api/v1/envs/torch25").status_code == 200
+        assert "torch25" not in [e["name"] for e in client.get("/api/v1/envs").json()["envs"]]
+
+
+def test_env_shared_installs_are_listed_but_not_removable():
+    app = create_app()
+    with TestClient(app) as client:
+        envs = client.get("/api/v1/envs").json()["envs"]
+        shared = [e for e in envs if e["source"] != "personal"]
+        assert shared, "공용 환경이 안 보이면 복제할 대상을 고를 수 없다"
+        assert all(e["removable"] is False for e in shared)
+        # 공용 설치는 읽기 전용이다. 지워지는 척하면 안 된다.
+        refused = client.delete(f"/api/v1/envs/{shared[0]['name']}")
+        assert refused.status_code == 404
+        assert refused.json()["error"]["code"] == "ENV_NOT_FOUND"
+
+
+def test_env_rejects_shell_flags_disguised_as_packages():
+    app = create_app()
+    with TestClient(app) as client:
+        # 따옴표로 감싸도 '--force-reinstall' 이 그대로 들어가면 conda 가 옵션으로 읽는다.
+        for payload in (
+            {"name": "bad1", "conda_packages": ["--force-reinstall"]},
+            {"name": "bad2", "pip_packages": ["-rrequirements.txt"]},
+            {"name": "bad3", "channels": ["--override-channels"]},
+            {"name": "../escape"},
+            {"name": "bad4", "python": "3.11; rm -rf /"},
+        ):
+            assert client.post("/api/v1/envs", json=payload).status_code == 422
+
+
+def test_env_duplicate_name_is_refused_before_a_long_build():
+    app = create_app()
+    with TestClient(app) as client:
+        first = client.post("/api/v1/envs", json={"name": "dup", "mode": "scratch"})
+        _wait_for_build(client, first.json()["build"]["build_id"])
+        again = client.post("/api/v1/envs", json={"name": "dup", "mode": "scratch"})
+        assert again.status_code == 409
+        assert again.json()["error"]["code"] == "ENV_ALREADY_EXISTS"
+
+
+def test_clone_mode_requires_an_existing_source():
+    app = create_app()
+    with TestClient(app) as client:
+        missing = client.post("/api/v1/envs", json={"name": "c1", "mode": "clone", "source": "nope"})
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "ENV_SOURCE_NOT_FOUND"
+        assert client.post("/api/v1/envs", json={"name": "c2", "mode": "clone"}).status_code == 422
+
+
+def test_job_script_activates_a_web_made_env_by_prefix(tmp_path):
+    """웹에서 만든 환경은 공용 설치의 envs 폴더에 없다.
+
+    이름만으로 `conda activate` 하면 conda 는 자기 envs_dirs 만 뒤지므로 job 이
+    "환경을 찾을 수 없다"로 죽는다. 절대 경로를 켜야 한다.
+    """
+    app = create_app()
+    with TestClient(app) as client:
+        made = client.post("/api/v1/envs", json={"name": "mine25", "mode": "scratch"})
+        _wait_for_build(client, made.json()["build"]["build_id"])
+
+        code = tmp_path / "code"
+        code.mkdir()
+        (code / "train.py").write_text("print('hi')", encoding="utf-8")
+        prepared = client.post("/api/v1/jobs/prepare", json=_job_payload(code, conda_env="mine25"))
+        assert prepared.status_code == 200
+        script = prepared.json()["script"]
+        assert "conda activate /data/mockuser/envs/mine25" in script
+
+
+# --- 알림 (작업 완료 · 환경 준비 완료) -----------------------------------------
+# 몇 시간짜리 학습을 화면 보면서 기다리게 하면 `watch squeue` 와 다를 게 없다.
+# 감시를 백엔드가 하는 이유는, 화면 폴링이 탭을 가리는 순간 멈추기 때문이다.
+
+def _drain_events(client, session=None, since=0, tries=40):
+    for _ in range(tries):
+        query = f"/api/v1/events?since={since}&can_notify=true"
+        if session:
+            query += f"&session={session}"
+        body = client.get(query).json()
+        if body["events"]:
+            return body
+        time.sleep(0.2)
+    return body
+
+
+def test_finished_env_build_becomes_an_event():
+    app = create_app()
+    with TestClient(app) as client:
+        app.state.watcher.interval = 0.2
+        base = client.get("/api/v1/events?can_notify=true").json()
+        assert base["latest_id"] == 0 and base["watching"] == {"jobs": 0, "builds": 0}
+
+        client.post("/api/v1/envs", json={"name": "alertenv", "mode": "scratch"})
+        assert client.get("/api/v1/events?can_notify=true").json()["watching"]["builds"] == 1
+
+        body = _drain_events(client, base["session"])
+        assert [e["kind"] for e in body["events"]] == ["env"]
+        event = body["events"][0]
+        assert event["ok"] is True and "alertenv" in event["title"]
+        # 끝난 것은 감시 목록에서 빠져야 한다. 안 그러면 매 주기마다 서버에 묻는다.
+        assert body["watching"]["builds"] == 0
+
+
+def test_events_are_not_replayed_to_a_caller_that_already_saw_them():
+    app = create_app()
+    with TestClient(app) as client:
+        app.state.watcher.interval = 0.2
+        session = client.get("/api/v1/events?can_notify=true").json()["session"]
+        client.post("/api/v1/envs", json={"name": "onceonly", "mode": "scratch"})
+        body = _drain_events(client, session)
+        latest = body["latest_id"]
+        again = client.get(f"/api/v1/events?since={latest}&session={session}&can_notify=true").json()
+        assert again["events"] == []
+
+
+def test_restarted_backend_tells_the_browser_to_rebaseline():
+    """백엔드를 다시 띄우면 이벤트 번호가 1부터 시작한다.
+
+    화면이 들고 있던 '42번까지 봤다'를 그대로 믿으면 새 이벤트를 영영 못 알아본다.
+    세션이 다르면 다시 맞추라고 알려줘야 한다.
+    """
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/events?since=99&session=ffffffffffff&can_notify=true").json()
+        assert body["reset"] is True and body["events"] == []
+        assert body["session"] != "ffffffffffff"
+
+
+def test_os_notification_only_when_no_browser_can_show_it(monkeypatch):
+    """같은 일로 두 번 울리면 안 되고, 아무도 못 받는 상태는 더 나쁘다.
+
+    브라우저가 알림을 띄울 수 있으면 화면이 맡고, 그렇지 않으면(탭을 닫았거나
+    알림 권한이 없거나) 백엔드가 OS 알림을 띄운다.
+    """
+    from backend import watcher as watcher_module
+
+    sent = []
+    monkeypatch.setattr(watcher_module.os_notify, "send",
+                        lambda title, body: sent.append(title) or True)
+
+    app = create_app()
+    with TestClient(app) as client:
+        watcher = app.state.watcher
+        watcher.interval = 0.2
+
+        # 1) 알림을 띄울 수 있는 브라우저가 살아 있다 -> OS 알림은 건너뛴다.
+        client.get("/api/v1/events?can_notify=true")
+        client.post("/api/v1/envs", json={"name": "hasbrowser", "mode": "scratch"})
+        _drain_events(client, since=0)
+        assert sent == []
+
+        # 2) 권한 없는 브라우저는 '살아 있음'으로 치지 않는다 -> 백엔드가 띄운다.
+        watcher._last_client_seen = 0.0
+        client.post("/api/v1/envs", json={"name": "nopermission", "mode": "scratch"})
+        for _ in range(40):
+            if sent:
+                break
+            client.get("/api/v1/events?can_notify=false")
+            time.sleep(0.2)
+        assert any("nopermission" in title for title in sent)
+
+
+def test_watcher_recovers_active_jobs_after_a_restart():
+    """백엔드 재시작은 흔하다. 재시작했다고 이미 낸 작업의 완료를 놓치면 안 된다."""
+    app = create_app()
+    with TestClient(app) as client:
+        watcher = app.state.watcher
+        watcher._jobs_watched.clear()
+        watcher.resync()
+        listed = client.get("/api/v1/jobs").json()["jobs"]
+        active = [j for j in listed if j["status"] in
+                  {"SUBMITTING", "SUBMITTED", "PENDING", "RUNNING", "COMPLETING", "CANCEL_REQUESTED"}]
+        assert len(watcher._jobs_watched) == len(active)
+
+
+def test_job_never_vanishes_while_its_status_is_being_written(tmp_path):
+    """상태를 쓰는 동안 다른 요청이 같은 작업을 읽어도 404 가 나면 안 된다.
+
+    알림 감시 스레드를 붙이면서 드러났지만 원래 있던 결함이다. 상태 갱신은
+    job.json 을 다시 쓰는데, 그 사이에 읽은 쪽에는 작업이 사라진 것으로 보였다.
+    브라우저 탭 두 개만 열어도 날 수 있었다.
+    """
+    import threading
+
+    code = tmp_path / "race"
+    code.mkdir()
+    (code / "train.py").write_text("print('ok')\n", encoding="utf-8")
+
+    app = create_app()
+    with TestClient(app) as client:
+        prepared = client.post("/api/v1/jobs/prepare", json=_job_payload(code))
+        local_id = prepared.json()["job"]["local_job_id"]
+        client.post(f"/api/v1/jobs/{local_id}/preflight")
+        client.post(f"/api/v1/jobs/{local_id}/submit",
+                    json={"request_id": "race-0001", "confirmed": True})
+
+        codes, stop = [], threading.Event()
+
+        def hammer():
+            while not stop.is_set():
+                # 예외도 실패로 센다. 서버가 500 으로 죽으면 TestClient 는 상태
+                # 코드를 주는 대신 예외를 다시 던지는데, 그걸 안 잡으면 스레드만
+                # 조용히 죽고 테스트는 통과한 것처럼 보인다.
+                for path in (f"/api/v1/jobs/{local_id}", "/api/v1/jobs"):
+                    try:
+                        codes.append(client.get(path).status_code)
+                    except Exception as exc:       # noqa: BLE001
+                        codes.append(type(exc).__name__)
+
+        threads = [threading.Thread(target=hammer) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        time.sleep(1.5)          # 그동안 mock 상태가 PENDING -> RUNNING -> COMPLETED 로 바뀐다
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert codes, "경합 구간을 한 번도 못 밟았다면 이 테스트는 아무것도 지키지 못한다"
+        assert set(codes) == {200}, f"작업이 잠깐 사라졌다: {sorted(set(codes))}"
+
+
+def test_env_list_surfaces_builds_the_browser_did_not_start():
+    """'다시 열면 진행 상황이 이어집니다'가 참이 되려면 서버가 알려줘야 한다.
+
+    화면은 자기가 시작한 빌드 번호를 브라우저에 저장한다. 다른 브라우저로 열거나
+    저장소를 지우면 그 번호가 없어서, 20분짜리 빌드가 화면에서 통째로 사라진다.
+    """
+    app = create_app()
+    with TestClient(app) as client:
+        app.state.watcher.interval = 0.2
+        assert client.get("/api/v1/envs").json()["running_builds"] == []
+
+        created = client.post("/api/v1/envs", json={"name": "orphan", "mode": "scratch"}).json()
+        running = client.get("/api/v1/envs").json()["running_builds"]
+        assert [b["build_id"] for b in running] == [created["build"]["build_id"]]
+        assert running[0]["name"] == "orphan"
+
+        _drain_events(client, since=0)
+        assert client.get("/api/v1/envs").json()["running_builds"] == []

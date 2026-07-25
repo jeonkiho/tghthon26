@@ -263,3 +263,62 @@ button.hrow:hover{background:#f8fafc}
 @keyframes scrimIn{from{opacity:0}}
 .drawer-delete{margin-top:14px;color:#8b96a7}
 .drawer-delete:hover{color:#c94c58;border-color:#f0c9cd;background:#fff7f7}
+
+/* --- 환경 화면 ------------------------------------------------------------
+   공용 설치는 읽기 전용이라 pip 하나 넣을 수 없었다. 여기서 내 폴더에 prefix
+   환경을 만든다. 점검 결과를 맨 위에 두는 이유는, 만들 수 없는 서버에서 '만들기'
+   버튼만 덩그러니 있는 게 가장 나쁘기 때문이다. */
+.envs-page{display:flex;flex-direction:column;gap:16px}
+.env-probe{padding:19px 22px}
+.env-probe.ok .panel-head svg{color:#21b98e}
+.env-probe.bad{border-color:#f0c9cd;background:#fffafa}
+.env-probe.bad .panel-head svg{color:#cc4c58}
+.env-blocker,.env-warning{display:flex;align-items:flex-start;gap:7px;font-size:10px;line-height:1.6;margin:10px 0 0;border-radius:7px;padding:9px 11px}
+.env-blocker{color:#c94c58;background:#fff0f1}
+.env-warning{color:#a4761d;background:#fff7e9}
+.env-blocker svg,.env-warning svg{flex:none;margin-top:2px}
+.env-facts{margin-top:15px;grid-template-columns:repeat(3,1fr)}
+.net-ok{color:#189a74}
+.net-bad{color:#c94c58}
+.envs-grid{display:grid;grid-template-columns:minmax(340px,1fr) minmax(420px,1.15fr);gap:16px;align-items:start}
+.envs-grid>.panel{padding:21px 23px}
+.env-list{list-style:none;margin:14px 0 0;padding:0}
+.env-list li{display:flex;align-items:center;gap:10px;border-top:1px solid #edf0f5;padding:11px 2px}
+.env-list li>div{flex:1;min-width:0}
+.env-list strong{display:block;font-size:11px;color:#253047}
+.env-list small{display:block;font-size:8px;color:#a0a9b8;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.env-list .icon-button{width:32px;height:32px}
+.env-list .icon-button:hover{color:#c94c58;border-color:#f0c9cd;background:#fff7f7}
+.muted-list strong{color:#66748a;font-weight:600}
+.env-tag{font-size:8px;font-weight:700;color:#7c8799;background:#f2f4f8;border-radius:5px;padding:4px 7px}
+.env-shared-head{margin:22px 0 0}
+.env-modes{display:flex;flex-direction:column;gap:7px;margin:16px 0 18px}
+.env-mode{border:1px solid var(--line);background:#fbfcfd;border-radius:9px;padding:11px 13px;text-align:left;transition:.15s}
+.env-mode:not(:disabled):hover{border-color:#b6c1d1}
+.env-mode.active{border-color:#67c9af;background:#f4fbf9;box-shadow:0 0 0 3px #3cc39f12}
+.env-mode strong{display:block;font-size:10px;color:#2b374d}
+.env-mode span{display:block;font-size:8px;color:#8792a4;line-height:1.5;margin-top:4px}
+.env-presets{margin:-4px 0 15px}
+.env-preset-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.env-preset-row .secondary{height:30px;font-size:9px;padding:0 11px}
+.env-note{margin:11px 0 0;text-align:center}
+.env-build-panel{padding:21px 23px}
+.env-build-panel .logs{height:230px;margin-top:13px}
+.env-build-panel>.secondary{margin-top:12px}
+
+/* --- 알림 -----------------------------------------------------------------
+   오류 토스트(빨강, 우하단)와 겹치지 않게 위로 쌓는다. 알림은 나쁜 소식이
+   아니라 "끝났다"는 소식이라, 색도 경고색을 쓰지 않는다. */
+.alert-bell{display:flex;align-items:center;gap:7px;height:38px;padding:0 12px;border:1px solid var(--line);background:#fff;border-radius:9px;color:#6f7c91;font-size:10px;font-weight:600}
+.alert-bell:not(:disabled):hover{color:#2a8d75;border-color:#bcded4}
+.alert-bell.on{color:#21b98e;border-color:#c7e9dd;background:#f4fbf9;padding:0 10px}
+.alert-bell:disabled{color:#b0b8c5}
+.alert-stack{position:fixed;right:24px;bottom:24px;z-index:65;display:flex;flex-direction:column-reverse;gap:9px;width:360px}
+.alert-card{display:flex;align-items:flex-start;gap:10px;background:#fff;border:1px solid var(--line);border-left:4px solid #21b98e;border-radius:10px;padding:13px 14px;box-shadow:0 14px 34px #17213b24;animation:toast .2s ease-out}
+.alert-card.bad{border-left-color:#e15a65}
+.alert-card>svg{flex:none;margin-top:1px;color:#21b98e}
+.alert-card.bad>svg{color:#e15a65}
+.alert-card>div{flex:1;min-width:0}
+.alert-card strong{display:block;font-size:10px;color:#253047}
+.alert-card p{font-size:9px;line-height:1.55;color:#68758a;margin:4px 0 0}
+.alert-card button{border:0;background:transparent;color:#a3adbc;padding:0}

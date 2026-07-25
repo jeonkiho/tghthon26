@@ -13,6 +13,7 @@ import stat
 import threading
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +30,41 @@ def _is_supported_archive(path: str) -> bool:
 
 _SUBMITTED = re.compile(r"Submitted batch job\s+(\d+)")
 _JOB_ID = re.compile(r"^[0-9]+$")
+
+# conda/pip 가 패키지를 받아야 하는 곳. 여기가 막혀 있으면 "처음부터 만들기"는
+# 아무리 기다려도 실패한다 — 누르기 전에 알아야 한다.
+PACKAGE_HOSTS = ("https://conda.anaconda.org/", "https://pypi.org/simple/")
+
+_PROBE_SCRIPT = """#!/usr/bin/bash
+# SERAPH GUI 환경 점검. 읽기만 한다 — 설치하거나 지우지 않는다.
+CONDA_ROOT={conda_root}
+DATA_ROOT={data_root}
+
+if [ -n "$CONDA_ROOT" ] && [ -x "$CONDA_ROOT/bin/conda" ]; then
+  printf 'conda_version=%s\\n' "$("$CONDA_ROOT/bin/conda" --version 2>/dev/null | tr -d '\\r')"
+fi
+printf 'mamba=%s\\n' "$(command -v mamba 2>/dev/null)"
+printf 'writable=%s\\n' "$([ -w "$DATA_ROOT" ] && echo 1 || echo 0)"
+
+# df 는 파일시스템 전체 여유를 말한다. 개인 쿼터와 다를 수 있어서 화면에서도
+# '파일시스템 여유'라고 부른다 — 없는 정보를 있는 척하지 않는다.
+line=$(df -Pk "$DATA_ROOT" 2>/dev/null | awk 'NR==2 {{print $1 " " $4}}')
+printf 'filesystem=%s\\n' "${{line%% *}}"
+printf 'avail_kb=%s\\n' "${{line##* }}"
+printf 'loadavg=%s\\n' "$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
+printf 'nproc=%s\\n' "$(nproc 2>/dev/null)"
+
+for u in {hosts}; do
+  c=000
+  if command -v curl >/dev/null 2>&1; then
+    c=$(curl -s -o /dev/null -m 8 -w '%{{http_code}}' "$u" 2>/dev/null || echo 000)
+  elif command -v wget >/dev/null 2>&1; then
+    if wget -q -T 8 -O /dev/null "$u" >/dev/null 2>&1; then c=200; else c=000; fi
+  fi
+  printf 'net=%s %s\\n' "$u" "$c"
+done
+exit 0
+""".replace("{hosts}", " ".join(PACKAGE_HOSTS))
 
 
 @dataclass
@@ -66,6 +102,7 @@ class MockRemote:
         self.username = "mockuser"
         self.data_root = f"{connection.config.data_root}/{self.username}"
         self._jobs: dict[str, dict[str, Any]] = {}
+        self._builds: dict[str, dict[str, Any]] = {}
         self._next_job_id = 990001
 
     @property
@@ -125,7 +162,10 @@ class MockRemote:
     def write_text(self, remote_path: str, text: str) -> None:
         target = self._local(remote_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(target.suffix + ".tmp")
+        # 임시 이름에 난수를 넣는다. 고정 이름이면 같은 파일을 동시에 쓰는 두 흐름이
+        # 같은 임시 파일을 열어 윈도우에서 PermissionError 로 죽는다. SSHRemote 와
+        # 같은 결함이라 같은 방식으로 막는다.
+        tmp = target.with_suffix(f"{target.suffix}.{uuid.uuid4().hex[:8]}.tmp")
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(target)
 
@@ -188,6 +228,80 @@ class MockRemote:
             "is_personal": True,
             "envs": ["pytorch1.12.1_p38"],
         }]}
+
+    # --- 개인 환경 만들기 (mock) ------------------------------------------
+    # 실서버 없이도 화면 전체를 시연할 수 있어야 한다. job mock 과 같은 방식으로
+    # 경과 시간에 따라 빌드가 진행되는 척한다.
+
+    @property
+    def envs_root(self) -> str:
+        return f"{self.data_root}/envs"
+
+    @property
+    def env_builds_root(self) -> str:
+        return f"{self.data_root}/.seraph-gui/envbuilds"
+
+    def probe_env_tools(self, conda_root: str | None) -> dict[str, Any]:
+        return {
+            "conda_version": "conda 24.1.2",
+            "mamba": "",
+            "writable": True,
+            "filesystem": "mock-nas:/data",
+            "avail_kb": "419430400",
+            "avail_bytes": 419430400 * 1024,
+            "loadavg": "0.30 0.25 0.20",
+            "nproc": "32",
+            "network": {host: 200 for host in PACKAGE_HOSTS},
+        }
+
+    def build_dir(self, build_id: str) -> str:
+        return f"{self.env_builds_root}/{build_id}"
+
+    def start_env_build(self, build_id: str, script: str, spec: dict[str, Any]) -> None:
+        directory = self.build_dir(build_id)
+        self.write_text(f"{directory}/spec.json", json.dumps(spec, ensure_ascii=False))
+        self.write_text(f"{directory}/build.sh", script)
+        self._builds[build_id] = {"started_at": time.monotonic(), "spec": spec}
+
+    def background_state(self, build_id: str) -> dict[str, Any]:
+        build = self._builds.get(build_id)
+        if build is None:
+            return {"rc": None, "alive": False, "log": ""}
+        elapsed = time.monotonic() - build["started_at"]
+        name = build["spec"]["name"]
+        # 실서버는 5~20분 걸리지만 mock 은 시연·테스트용이라 몇 초로 압축한다.
+        steps = [
+            (0.0, "[seraph] 환경 빌드를 시작합니다"),
+            (0.4, "[seraph] 패키지 목록을 확인하는 중 (solve)"),
+            (0.9, "[seraph] 패키지를 내려받는 중"),
+            (1.4, f"[seraph] {name} 준비 완료"),
+        ]
+        log = "\n".join(text for at, text in steps if elapsed >= at)
+        done = elapsed >= 1.4
+        if done:
+            prefix = f"{self.envs_root}/{name}"
+            self.make_dir(f"{prefix}/conda-meta")
+            self.write_text(f"{prefix}/seraph-env.json", json.dumps(build["spec"]))
+        return {"rc": 0 if done else None, "alive": not done, "log": log}
+
+    def list_prefix_envs(self) -> list[dict[str, Any]]:
+        base = self._local(self.envs_root)
+        if not base.is_dir():
+            return []
+        envs = []
+        for child in sorted(base.iterdir(), key=lambda p: p.name.lower()):
+            if not child.is_dir():
+                continue
+            envs.append({
+                "name": child.name,
+                "prefix": f"{self.envs_root}/{child.name}",
+                "kind": "conda" if (child / "conda-meta").is_dir() else "venv",
+                "python": "Python 3.11.9",
+            })
+        return envs
+
+    def remove_prefix_env(self, name: str) -> None:
+        shutil.rmtree(self._local(f"{self.envs_root}/{name}"), ignore_errors=True)
 
     def list_directories(self, root: str) -> list[str]:
         base = self._local(root)
@@ -325,6 +439,21 @@ class SSHRemote:
         """웹에서 올린 데이터셋이 들어가는 곳. 사용자 자기 NAS 폴더 안이다."""
         return f"{self.data_root}/datasets"
 
+    @property
+    def envs_root(self) -> str:
+        """웹에서 만든 개인 conda 환경이 들어가는 곳.
+
+        공용 설치(/data/opt/anaconda3)는 읽기 전용이라 거기에는 환경을 못 만든다.
+        공용 conda 바이너리로 **prefix** 환경을 내 폴더에 만들면, 수 GB 짜리 개인
+        anaconda3 를 따로 설치하지 않고도 원하는 파이썬 버전을 가질 수 있다.
+        """
+        return f"{self.data_root}/envs"
+
+    @property
+    def env_builds_root(self) -> str:
+        """환경 빌드 스크립트와 로그. 환경 자체와 섞이면 목록에 잡힌다."""
+        return f"{self.data_root}/.seraph-gui/envbuilds"
+
     def _guard_write(self, path: str, roots: list[str], message: str) -> str:
         clean = posixpath.normpath(path)
         for root in roots:
@@ -334,12 +463,13 @@ class SSHRemote:
         raise ApiError("REMOTE_PATH_NOT_ALLOWED", message, status_code=403)
 
     def _guard_job_path(self, path: str) -> str:
-        # 쓰기는 여전히 사용자 소유 폴더로만 제한한다. 데이터셋 업로드 때문에
-        # 허용 루트가 하나 늘었을 뿐, /data 전체가 열린 게 아니다.
+        # 쓰기는 여전히 사용자 소유 폴더로만 제한한다. 데이터셋 업로드와 환경 빌드
+        # 때문에 허용 루트가 늘었을 뿐, 넷 다 /data/<사용자> 아래고 /data 전체가
+        # 열린 게 아니다.
         return self._guard_write(
             path,
-            [self.jobs_root, self.datasets_root],
-            "작업 파일은 사용자 작업·데이터 폴더 아래에만 만들 수 있습니다.",
+            [self.jobs_root, self.datasets_root, self.envs_root, self.env_builds_root],
+            "작업 파일은 사용자 작업·데이터·환경 폴더 아래에만 만들 수 있습니다.",
         )
 
     def list_entries(self, path: str) -> dict[str, Any]:
@@ -437,6 +567,138 @@ class SSHRemote:
             })
         return {"installs": installs}
 
+    # --- 개인 환경 만들기 -------------------------------------------------
+    # 공용 설치는 읽기 전용이라 pip 하나 넣을 수 없다. 여기 있는 것들은 공용 conda
+    # 바이너리를 읽기만 하고, 쓰기는 전부 /data/<사용자>/envs 아래로 간다.
+
+    def run_script(self, script: str, *, label: str, timeout: int = 60) -> str:
+        """스크립트를 파일로 올린 뒤 실행한다.
+
+        긴 셸 명령을 문자열로 이어 붙이면 따옴표가 세 겹으로 중첩되면서, 고치는
+        사람이 무엇이 실행되는지 읽을 수 없게 된다. 파일로 올리면 그냥 셸 스크립트다.
+        """
+        # 요청마다 다른 이름을 쓴다. 고정 이름이면 화면 두 곳이 동시에 점검할 때
+        # 서로의 스크립트를 덮어써서 엉뚱한 걸 실행한다.
+        path = f"{self.env_builds_root}/_run-{uuid.uuid4().hex[:8]}.sh"
+        self.write_text(path, script)
+        quoted = shlex.quote(path)
+        # 실행 후 지운다. 점검은 화면을 열 때마다 도는데, 남겨두면 사용자 NAS 에
+        # 쓰레기 파일이 쌓인다.
+        return self.connection.run_command(
+            f"bash {quoted}; rm -f -- {quoted}", label=label, timeout=timeout, check=False)
+
+    def probe_env_tools(self, conda_root: str | None) -> dict[str, Any]:
+        """이 서버에서 환경을 만들 수 있는지 사실만 모아 온다. 아무것도 바꾸지 않는다.
+
+        추측하면 "만들기" 버튼을 눌렀을 때 20분 뒤에 실패한다. 네트워크가 막혀
+        있는지, 디스크가 남는지, conda 가 실행은 되는지 먼저 물어본다.
+        """
+        script = _PROBE_SCRIPT.format(
+            conda_root=shlex.quote(conda_root or ""),
+            data_root=shlex.quote(self.data_root),
+        )
+        raw = self.run_script(script, label="환경 점검", timeout=60)
+        info: dict[str, Any] = {"network": {}}
+        for line in raw.splitlines():
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if key == "net":
+                url, _, code = value.rpartition(" ")
+                info["network"][url] = int(code) if code.isdigit() else 0
+            elif key:
+                info[key] = value
+        avail = info.get("avail_kb", "")
+        info["avail_bytes"] = int(avail) * 1024 if avail.isdigit() else None
+        info["writable"] = info.get("writable") == "1"
+        return info
+
+    def build_dir(self, build_id: str) -> str:
+        return f"{self.env_builds_root}/{build_id}"
+
+    def start_env_build(self, build_id: str, script: str, spec: dict[str, Any]) -> None:
+        """빌드를 백그라운드로 띄운다. conda solve 는 20분까지 걸린다.
+
+        HTTP 요청 안에서 기다릴 수 없고, SSH 채널이 닫혀도 죽으면 안 된다.
+        그래서 nohup 으로 떼어놓고, 진행 상황은 로그 파일을 tail 해서 본다.
+        """
+        directory = self.build_dir(build_id)
+        self.write_text(f"{directory}/spec.json", json.dumps(spec, ensure_ascii=False))
+        self.write_text(f"{directory}/build.sh", script)
+        quoted = shlex.quote(directory)
+        # stdin 을 /dev/null 로 돌리고 stdout/stderr 를 파일로 보내지 않으면
+        # paramiko 가 채널 EOF 를 기다리며 이 호출 자체가 블록된다.
+        command = (
+            f"cd {quoted} && "
+            "{ nohup bash build.sh > build.log 2>&1 < /dev/null & } && "
+            'echo "$!" > pid'
+        )
+        self.connection.run_command(command, label="환경 빌드 시작", timeout=30)
+
+    def background_state(self, build_id: str) -> dict[str, Any]:
+        """빌드 상태. rc 파일이 있으면 끝난 것이고, 없으면 PID 가 살아있는지 본다.
+
+        rc 파일만 보면 프로세스가 죽었을 때(노드 재시작 등) 영원히 '진행 중'으로
+        남는다. 끝나지 않는 진행 표시줄은 오류 메시지보다 나쁘다.
+        """
+        directory = shlex.quote(self.build_dir(build_id))
+        command = (
+            f"d={directory}; "
+            'printf "rc=%s\\n" "$(cat "$d/rc" 2>/dev/null)"; '
+            'p=$(cat "$d/pid" 2>/dev/null); '
+            'if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then a=1; else a=0; fi; '
+            'printf "alive=%s\\n" "$a"'
+        )
+        raw = self.connection.run_command(
+            command, label="환경 빌드 상태", timeout=20, check=False)
+        parsed = {}
+        for line in raw.splitlines():
+            key, _, value = line.partition("=")
+            parsed[key.strip()] = value.strip()
+        return {
+            "rc": int(parsed["rc"]) if parsed.get("rc", "").lstrip("-").isdigit() else None,
+            "alive": parsed.get("alive") == "1",
+            "log": self.tail(f"{self.build_dir(build_id)}/build.log"),
+        }
+
+    def list_prefix_envs(self) -> list[dict[str, Any]]:
+        """/data/<사용자>/envs 아래의 환경들. conda-meta 가 있어야 진짜 환경이다."""
+        root = shlex.quote(self.envs_root)
+        command = (
+            f"root={root}; [ -d \"$root\" ] || exit 0; "
+            'for d in "$root"/*; do '
+            '  [ -d "$d/conda-meta" ] || [ -x "$d/bin/python" ] || continue; '
+            '  v=$("$d/bin/python" --version 2>&1 | tr -d "\\r"); '
+            '  if [ -d "$d/conda-meta" ]; then k=conda; else k=venv; fi; '
+            '  printf "%s\\t%s\\t%s\\n" "$(basename "$d")" "$k" "$v"; '
+            "done"
+        )
+        raw = self.connection.run_command(
+            command, label="개인 환경 목록", timeout=30, check=False)
+        envs = []
+        for line in raw.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3 or not parts[0]:
+                continue
+            envs.append({
+                "name": parts[0],
+                "prefix": f"{self.envs_root}/{parts[0]}",
+                "kind": parts[1],
+                "python": parts[2] or None,
+            })
+        return sorted(envs, key=lambda e: e["name"].lower())
+
+    def remove_prefix_env(self, name: str) -> None:
+        """내가 만든 환경만 지운다. 공용 설치는 이 경로에 있을 수 없다."""
+        target = self._guard_write(
+            f"{self.envs_root}/{name}",
+            [self.envs_root],
+            "직접 만든 환경만 삭제할 수 있습니다.",
+        )
+        if target == posixpath.normpath(self.envs_root):
+            raise ApiError("REMOTE_PATH_NOT_ALLOWED", "환경 폴더 전체는 지울 수 없습니다.", 403)
+        self.connection.run_command(
+            f"rm -rf -- {shlex.quote(target)}", label="환경 삭제", timeout=120)
+
     def path_info(self, path: str) -> PathInfo:
         quoted = shlex.quote(path)
         command = (
@@ -481,17 +743,26 @@ class SSHRemote:
     def write_text(self, remote_path: str, text: str) -> None:
         target = self._guard_job_path(remote_path)
         self.make_dir(posixpath.dirname(target))
-        tmp = target + ".tmp"
+        # 임시 이름에 난수를 넣는다. 고정 이름이면 같은 파일을 동시에 쓰는 두 흐름이
+        # 서로의 임시 파일을 가져가, 한쪽이 "파일이 없다"로 죽는다.
+        tmp = f"{target}.{uuid.uuid4().hex[:8]}.tmp"
         with self._sftp_lock:
             with self.sftp.file(tmp, "w") as handle:
                 handle.write(text)
                 handle.flush()
             self.sftp.chmod(tmp, 0o600)
             try:
-                self.sftp.remove(target)
-            except OSError:
-                pass
-            self.sftp.rename(tmp, target)
+                # posix_rename 은 기존 파일 위에 원자적으로 덮어쓴다. 예전처럼
+                # remove 후 rename 하면 그 사이 아주 짧게 파일이 **없는** 순간이
+                # 생기고, 그때 job.json 을 읽은 쪽에는 작업이 사라진 것으로 보인다.
+                self.sftp.posix_rename(tmp, target)
+            except (OSError, AttributeError):
+                # 서버가 posix-rename 확장을 지원하지 않으면 예전 방식으로 되돌린다.
+                try:
+                    self.sftp.remove(target)
+                except OSError:
+                    pass
+                self.sftp.rename(tmp, target)
 
     def read_text(self, remote_path: str, max_bytes: int = 1_000_000) -> str:
         target = self._guard_job_path(remote_path)

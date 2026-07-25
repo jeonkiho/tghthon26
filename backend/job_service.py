@@ -11,6 +11,7 @@ import shlex
 import stat
 import tarfile
 import tempfile
+import threading
 import time
 import zipfile
 from contextlib import contextmanager
@@ -70,6 +71,12 @@ def _public_prediction(raw: str) -> dict[str, Any]:
 class JobService:
     def __init__(self, manager: ConnectionManager):
         self.manager = manager
+        # job.json 을 읽고 쓰는 구간을 한 번에 하나씩만 돌린다.
+        #
+        # 이건 알림 감시 스레드 때문에 드러났지만, 원래 있던 결함이다. 상태 갱신은
+        # job.json 을 다시 쓰는데, 그 사이에 다른 스레드가 같은 파일을 읽으면 작업이
+        # 잠깐 "없는 것"이 된다(404). 브라우저 탭 두 개만 열어도 날 수 있었다.
+        self._meta_lock = threading.RLock()
 
     @property
     def remote(self) -> MockRemote | SSHRemote:
@@ -378,13 +385,7 @@ class JobService:
             lines.append('SERAPH_DATASET_PATH="$DATASET_SOURCE"')
 
         if meta.get("conda_env"):
-            env = shlex.quote(meta["conda_env"])
-            conda_sh = shlex.quote(self._conda_sh(meta))
-            lines.extend([
-                f'[ -r {conda_sh} ] || {{ echo "개인 Conda 초기화 파일을 찾을 수 없습니다: {conda_sh}" >&2; exit 127; }}',
-                f'. {conda_sh}',
-                f"conda activate {env}",
-            ])
+            lines.extend(self._activate_lines(meta))
 
         run = f"python -u {entrypoint}"
         if args:
@@ -396,23 +397,63 @@ class JobService:
         ])
         return "\n".join(lines)
 
-    def _resolve_conda_root(self, conda_env: str | None) -> str | None:
-        """이 환경 이름을 가진 conda 설치를 찾는다. 개인 설치를 공용보다 우선한다.
+    def _resolve_conda(self, conda_env: str | None) -> dict[str, str | None]:
+        """환경 이름 하나를 (어느 conda 로 켤지, 무엇을 켤지) 로 바꾼다.
 
-        환경을 안 쓰면 None. 못 찾으면 None 을 돌려주고 _conda_sh 가 예전 기본값으로
-        떨어진다 — 그 경우 job 이 "conda 초기화 파일을 찾을 수 없습니다" 로 명확히 죽는다.
+        웹에서 만든 환경은 공용 설치의 envs 폴더가 아니라 /data/<사용자>/envs 아래
+        **prefix** 로 있다. 이름만으로 `conda activate` 하면 conda 는 자기 envs_dirs
+        에서만 찾으므로 "환경을 찾을 수 없다"로 죽는다. 그래서 내가 만든 환경이면
+        절대 경로를 켠다 — `conda activate /경로` 는 이름과 똑같이 동작한다.
+
+        환경을 안 쓰면 둘 다 None. 못 찾으면 root 만 None 이 되고 _conda_sh 가 예전
+        기본값으로 떨어져, job 이 "conda 초기화 파일을 찾을 수 없습니다"로 명확히 죽는다.
         """
         if not conda_env:
-            return None
+            return {"root": None, "target": None, "kind": None}
         try:
-            found = self.remote.find_conda()
+            installs = self.remote.find_conda().get("installs", [])
         except Exception:
-            return None
-        installs = found.get("installs", [])
-        for install in sorted(installs, key=lambda i: not i.get("is_personal")):
+            installs = []
+        ranked = sorted(installs, key=lambda i: not i.get("is_personal"))
+        default_root = ranked[0]["root"] if ranked else None
+
+        # 내가 만든 prefix 환경을 먼저 본다. 같은 이름이 공용에도 있으면 사용자가
+        # 직접 만든 쪽을 뜻한다고 보는 게 맞다.
+        try:
+            for env in self.remote.list_prefix_envs():
+                if env["name"] == conda_env:
+                    return {
+                        "root": default_root,
+                        "target": env["prefix"],
+                        "kind": env.get("kind") or "conda",
+                    }
+        except Exception:
+            pass
+
+        for install in ranked:
             if conda_env in (install.get("envs") or []):
-                return install["root"]
-        return installs[0]["root"] if installs else None
+                return {"root": install["root"], "target": conda_env, "kind": "conda"}
+        return {"root": default_root, "target": conda_env, "kind": "conda"}
+
+    def _activate_lines(self, meta: dict[str, Any]) -> list[str]:
+        """환경을 켜는 줄. venv 는 conda 환경이 아니라서 activate 방법이 다르다.
+
+        sbatch 페이로드는 비로그인 셸이라 .bashrc 를 아무도 읽어주지 않는다.
+        무엇을 쓰든 스크립트가 직접 켜야 한다.
+        """
+        target = meta.get("conda_target") or meta["conda_env"]
+        if meta.get("conda_kind") == "venv":
+            activate = shlex.quote(f"{target}/bin/activate")
+            return [
+                f'[ -r {activate} ] || {{ echo "venv 활성화 파일을 찾을 수 없습니다: {activate}" >&2; exit 127; }}',
+                f". {activate}",
+            ]
+        conda_sh = shlex.quote(self._conda_sh(meta))
+        return [
+            f'[ -r {conda_sh} ] || {{ echo "Conda 초기화 파일을 찾을 수 없습니다: {conda_sh}" >&2; exit 127; }}',
+            f". {conda_sh}",
+            f"conda activate {shlex.quote(target)}",
+        ]
 
     def _conda_sh(self, meta: dict[str, Any]) -> str:
         """이 job 이 source 할 conda.sh 경로.
@@ -453,13 +494,7 @@ class JobService:
             lines.append(f'tar -xzf "$LOCAL_ROOT"/{archive} -C "$CODE_DIR"')
         lines.append(f'test -f "$CODE_DIR"/{entrypoint}')
         if meta.get("conda_env"):
-            env = shlex.quote(meta["conda_env"])
-            conda_sh = shlex.quote(self._conda_sh(meta))
-            lines.extend([
-                f"test -r {conda_sh}",
-                f". {conda_sh}",
-                f"conda activate {env}",
-            ])
+            lines.extend(self._activate_lines(meta))
         lines.extend([
             "nvidia-smi -L",
             "python --version",
@@ -526,6 +561,10 @@ class JobService:
             "time_limit": staged.time_limit,
             "node": staged.node,
             "conda_env": staged.conda_env,
+            # conda_root/target/kind 도 job.json 에서 읽지 않고 지금 서버에 다시
+            # 물어본다. 파일은 사용자가 서버에서 고칠 수 있고, 그 값들은 스크립트가
+            # source 하고 activate 할 경로가 된다.
+            **{f"conda_{k}": v for k, v in self._resolve_conda(staged.conda_env).items()},
         })
         direct_paths = [] if meta["copy_dataset_to_local"] else [meta["dataset_path"]]
         built = sbatch.generate_sbatch(
@@ -595,109 +634,111 @@ class JobService:
             )
 
     def prepare(self, spec: JobSpec, snapshot: Any) -> dict[str, Any]:
-        validation = self.validate(spec, snapshot)
-        if not validation["ok"]:
-            first = next(problem for problem in validation["problems"] if problem["level"] == "block")
-            raise ApiError("JOB_CONFIGURATION_BLOCKED", first["message"], status_code=422)
+        with self._meta_lock:
+            validation = self.validate(spec, snapshot)
+            if not validation["ok"]:
+                first = next(problem for problem in validation["problems"] if problem["level"] == "block")
+                raise ApiError("JOB_CONFIGURATION_BLOCKED", first["message"], status_code=422)
 
-        code = self._inspect_local_code(spec)
-        local_id = secrets.token_hex(6)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        remote_dir = f"{self.remote.jobs_root}/{stamp}-{spec.name}-{local_id}"
-        archive_name = "code.zip" if code["kind"] == "zip" else "code.tar.gz"
-        meta: dict[str, Any] = {
-            "schema_version": 1,
-            "local_job_id": local_id,
-            "slurm_job_id": None,
-            "job_name": spec.name,
-            "username": self.remote.username,
-            "entrypoint": spec.entrypoint,
-            "arguments": spec.arguments,
-            "dataset_path": spec.dataset_path,
-            "output_path": spec.output_path,
-            "copy_dataset_to_local": spec.copy_dataset_to_local,
-            "partition": spec.partition or snapshot.default_partition,
-            "gpus": spec.gpus,
-            "high_perf": spec.high_perf,
-            "cpus": spec.cpus,
-            "memory": spec.memory,
-            "time_limit": spec.time_limit,
-            "node": validation["resolved"]["node"],
-            "auto_selected_node": validation["resolved"]["auto_selected_node"],
-            "conda_env": spec.conda_env,
-            "conda_root": self._resolve_conda_root(spec.conda_env),
-            "code_source_name": code["display_name"],
-            "code_archive_name": archive_name,
-            "code_archive_kind": code["kind"],
-            "remote_dir": remote_dir,
-            "stdout_path": f"{remote_dir}/stdout.log",
-            "stderr_path": f"{remote_dir}/stderr.log",
-            "status": "VALIDATED",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-            "submitted_at": None,
-            "submit_request_id": None,
-        }
-        built = self._build_script(snapshot, meta)
-        prediction = _public_prediction(self.connection.test_submit(built["script"]))
-        if not prediction["ok"]:
-            raise ApiError(
-                "SLURM_TEST_REJECTED",
-                prediction["reason"] or "Slurm 제출 전 검사에서 거절되었습니다.",
-                status_code=422,
-            )
+            code = self._inspect_local_code(spec)
+            local_id = secrets.token_hex(6)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            remote_dir = f"{self.remote.jobs_root}/{stamp}-{spec.name}-{local_id}"
+            archive_name = "code.zip" if code["kind"] == "zip" else "code.tar.gz"
+            meta: dict[str, Any] = {
+                "schema_version": 1,
+                "local_job_id": local_id,
+                "slurm_job_id": None,
+                "job_name": spec.name,
+                "username": self.remote.username,
+                "entrypoint": spec.entrypoint,
+                "arguments": spec.arguments,
+                "dataset_path": spec.dataset_path,
+                "output_path": spec.output_path,
+                "copy_dataset_to_local": spec.copy_dataset_to_local,
+                "partition": spec.partition or snapshot.default_partition,
+                "gpus": spec.gpus,
+                "high_perf": spec.high_perf,
+                "cpus": spec.cpus,
+                "memory": spec.memory,
+                "time_limit": spec.time_limit,
+                "node": validation["resolved"]["node"],
+                "auto_selected_node": validation["resolved"]["auto_selected_node"],
+                "conda_env": spec.conda_env,
+                **{f"conda_{k}": v for k, v in self._resolve_conda(spec.conda_env).items()},
+                "code_source_name": code["display_name"],
+                "code_archive_name": archive_name,
+                "code_archive_kind": code["kind"],
+                "remote_dir": remote_dir,
+                "stdout_path": f"{remote_dir}/stdout.log",
+                "stderr_path": f"{remote_dir}/stderr.log",
+                "status": "VALIDATED",
+                "created_at": _now_iso(),
+                "updated_at": _now_iso(),
+                "submitted_at": None,
+                "submit_request_id": None,
+            }
+            built = self._build_script(snapshot, meta)
+            prediction = _public_prediction(self.connection.test_submit(built["script"]))
+            if not prediction["ok"]:
+                raise ApiError(
+                    "SLURM_TEST_REJECTED",
+                    prediction["reason"] or "Slurm 제출 전 검사에서 거절되었습니다.",
+                    status_code=422,
+                )
 
-        self.remote.make_dir(remote_dir)
-        with self._package_code(code) as (local_archive, upload_name):
-            self.remote.upload_file(local_archive, f"{remote_dir}/{upload_name}")
-        self.remote.write_text(f"{remote_dir}/job.sbatch", built["script"])
-        meta["status"] = "STAGED"
-        meta["updated_at"] = _now_iso()
-        meta["test_only"] = prediction
-        self._write_meta(meta)
-        return {
-            "ok": True,
-            "job": self._public_job(meta),
-            "script": built["script"],
-            "lint": built["lint"],
-            "test_only": prediction,
-        }
+            self.remote.make_dir(remote_dir)
+            with self._package_code(code) as (local_archive, upload_name):
+                self.remote.upload_file(local_archive, f"{remote_dir}/{upload_name}")
+            self.remote.write_text(f"{remote_dir}/job.sbatch", built["script"])
+            meta["status"] = "STAGED"
+            meta["updated_at"] = _now_iso()
+            meta["test_only"] = prediction
+            self._write_meta(meta)
+            return {
+                "ok": True,
+                "job": self._public_job(meta),
+                "script": built["script"],
+                "lint": built["lint"],
+                "test_only": prediction,
+            }
 
     def preflight(self, local_job_id: str) -> dict[str, Any]:
-        meta = self._find(local_job_id)
-        if meta.get("slurm_job_id") or meta.get("status") != "STAGED":
-            raise ApiError("JOB_NOT_PREPARED", "준비 완료 상태에서만 srun 사전 점검을 할 수 있습니다.", 409)
-        self._validate_staged_remote(meta)
-        script = self._preflight_script(meta)
-        self.remote.write_text(f"{meta['remote_dir']}/preflight.sh", script)
-        debug_partition = self._debug_partition(meta["partition"])
-        try:
-            output = self.remote.run_preflight(
-                meta["remote_dir"],
-                partition=debug_partition,
-                gpus=meta["gpus"],
-                high_perf=meta["high_perf"],
-                cpus=meta["cpus"],
-                memory=meta["memory"],
-                node=meta.get("node"),
-            )
-        except Exception as exc:
+        with self._meta_lock:
+            meta = self._find(local_job_id)
+            if meta.get("slurm_job_id") or meta.get("status") != "STAGED":
+                raise ApiError("JOB_NOT_PREPARED", "준비 완료 상태에서만 srun 사전 점검을 할 수 있습니다.", 409)
+            self._validate_staged_remote(meta)
+            script = self._preflight_script(meta)
+            self.remote.write_text(f"{meta['remote_dir']}/preflight.sh", script)
+            debug_partition = self._debug_partition(meta["partition"])
+            try:
+                output = self.remote.run_preflight(
+                    meta["remote_dir"],
+                    partition=debug_partition,
+                    gpus=meta["gpus"],
+                    high_perf=meta["high_perf"],
+                    cpus=meta["cpus"],
+                    memory=meta["memory"],
+                    node=meta.get("node"),
+                )
+            except Exception as exc:
+                meta["preflight"] = {
+                    "ok": False,
+                    "partition": debug_partition,
+                    "checked_at": _now_iso(),
+                    "output": str(exc)[-16_000:],
+                }
+                self._write_meta(meta)
+                return {"ok": False, "preflight": meta["preflight"], "job": self._public_job(meta)}
             meta["preflight"] = {
-                "ok": False,
+                "ok": True,
                 "partition": debug_partition,
                 "checked_at": _now_iso(),
-                "output": str(exc)[-16_000:],
+                "output": output[-16_000:],
             }
             self._write_meta(meta)
-            return {"ok": False, "preflight": meta["preflight"], "job": self._public_job(meta)}
-        meta["preflight"] = {
-            "ok": True,
-            "partition": debug_partition,
-            "checked_at": _now_iso(),
-            "output": output[-16_000:],
-        }
-        self._write_meta(meta)
-        return {"ok": True, "preflight": meta["preflight"], "job": self._public_job(meta)}
+            return {"ok": True, "preflight": meta["preflight"], "job": self._public_job(meta)}
 
     def _write_meta(self, meta: dict[str, Any]) -> None:
         meta["updated_at"] = _now_iso()
@@ -724,61 +765,62 @@ class JobService:
         raise ApiError("JOB_NOT_FOUND", "작업을 찾을 수 없습니다.", 404)
 
     def submit(self, local_job_id: str, request_id: str, confirmed: bool, snapshot: Any) -> dict[str, Any]:
-        if not confirmed:
-            raise ApiError("CONFIRMATION_REQUIRED", "최종 확인 후 제출할 수 있습니다.", 409)
-        meta = self._find(local_job_id)
-        if meta.get("slurm_job_id"):
-            if meta.get("submit_request_id") == request_id:
-                return {"ok": True, "idempotent": True, "job": self._public_job(meta)}
-            raise ApiError("JOB_ALREADY_SUBMITTED", "이미 제출된 작업입니다.", 409)
-        if meta.get("status") == "SUBMITTING":
-            if meta.get("submit_request_id") == request_id:
+        with self._meta_lock:
+            if not confirmed:
+                raise ApiError("CONFIRMATION_REQUIRED", "최종 확인 후 제출할 수 있습니다.", 409)
+            meta = self._find(local_job_id)
+            if meta.get("slurm_job_id"):
+                if meta.get("submit_request_id") == request_id:
+                    return {"ok": True, "idempotent": True, "job": self._public_job(meta)}
+                raise ApiError("JOB_ALREADY_SUBMITTED", "이미 제출된 작업입니다.", 409)
+            if meta.get("status") == "SUBMITTING":
+                if meta.get("submit_request_id") == request_id:
+                    raise ApiError(
+                        "SUBMIT_IN_PROGRESS",
+                        "앞선 제출 요청의 결과를 확인 중입니다. 잠시 후 작업 목록을 새로고침하세요.",
+                        status_code=409,
+                        retryable=True,
+                    )
+                raise ApiError("JOB_ALREADY_SUBMITTED", "이미 제출이 시작된 작업입니다.", 409)
+            if meta.get("status") != "STAGED":
+                raise ApiError("JOB_NOT_PREPARED", "준비 완료 상태의 작업만 제출할 수 있습니다.", 409)
+            if not meta.get("preflight", {}).get("ok"):
                 raise ApiError(
-                    "SUBMIT_IN_PROGRESS",
-                    "앞선 제출 요청의 결과를 확인 중입니다. 잠시 후 작업 목록을 새로고침하세요.",
+                    "SRUN_PREFLIGHT_REQUIRED",
+                    "튜토리얼 절차에 따라 srun 사전 점검을 통과한 뒤 제출하세요.",
                     status_code=409,
-                    retryable=True,
                 )
-            raise ApiError("JOB_ALREADY_SUBMITTED", "이미 제출이 시작된 작업입니다.", 409)
-        if meta.get("status") != "STAGED":
-            raise ApiError("JOB_NOT_PREPARED", "준비 완료 상태의 작업만 제출할 수 있습니다.", 409)
-        if not meta.get("preflight", {}).get("ok"):
-            raise ApiError(
-                "SRUN_PREFLIGHT_REQUIRED",
-                "튜토리얼 절차에 따라 srun 사전 점검을 통과한 뒤 제출하세요.",
-                status_code=409,
-            )
 
-        # 서버 파일이 수정되었더라도 구조화된 job.json으로 스크립트를 다시 만든다.
-        built = self._build_script(snapshot, meta)
-        self._validate_staged_remote(meta)
-        prediction = _public_prediction(self.connection.test_submit(built["script"]))
-        if not prediction["ok"]:
-            raise ApiError("SLURM_TEST_REJECTED", prediction["reason"], 422)
-        self.remote.write_text(f"{meta['remote_dir']}/job.sbatch", built["script"])
-        # sbatch 성공 직후 프로세스가 중단돼도 같은 요청을 다시 실행하지 않도록
-        # SUBMITTING을 먼저 기록한다. 결과가 불명확하면 자동 재제출하지 않는다.
-        meta["status"] = "SUBMITTING"
-        meta["submit_request_id"] = request_id
-        self._write_meta(meta)
-        try:
-            slurm_job_id = self.remote.submit(meta["remote_dir"])
-        except Exception as exc:
-            raise ApiError(
-                "SUBMIT_STATUS_UNKNOWN",
-                "제출 결과를 확정하지 못했습니다. 중복 제출을 막기 위해 자동 재시도하지 않습니다.",
-                status_code=503,
-                retryable=True,
-            ) from exc
-        meta.update({
-            "slurm_job_id": slurm_job_id,
-            "status": "SUBMITTED",
-            "submitted_at": _now_iso(),
-            "submit_request_id": request_id,
-            "test_only": prediction,
-        })
-        self._write_meta(meta)
-        return {"ok": True, "idempotent": False, "job": self._public_job(meta)}
+            # 서버 파일이 수정되었더라도 구조화된 job.json으로 스크립트를 다시 만든다.
+            built = self._build_script(snapshot, meta)
+            self._validate_staged_remote(meta)
+            prediction = _public_prediction(self.connection.test_submit(built["script"]))
+            if not prediction["ok"]:
+                raise ApiError("SLURM_TEST_REJECTED", prediction["reason"], 422)
+            self.remote.write_text(f"{meta['remote_dir']}/job.sbatch", built["script"])
+            # sbatch 성공 직후 프로세스가 중단돼도 같은 요청을 다시 실행하지 않도록
+            # SUBMITTING을 먼저 기록한다. 결과가 불명확하면 자동 재제출하지 않는다.
+            meta["status"] = "SUBMITTING"
+            meta["submit_request_id"] = request_id
+            self._write_meta(meta)
+            try:
+                slurm_job_id = self.remote.submit(meta["remote_dir"])
+            except Exception as exc:
+                raise ApiError(
+                    "SUBMIT_STATUS_UNKNOWN",
+                    "제출 결과를 확정하지 못했습니다. 중복 제출을 막기 위해 자동 재시도하지 않습니다.",
+                    status_code=503,
+                    retryable=True,
+                ) from exc
+            meta.update({
+                "slurm_job_id": slurm_job_id,
+                "status": "SUBMITTED",
+                "submitted_at": _now_iso(),
+                "submit_request_id": request_id,
+                "test_only": prediction,
+            })
+            self._write_meta(meta)
+            return {"ok": True, "idempotent": False, "job": self._public_job(meta)}
 
     @staticmethod
     def _normalize_state(value: str) -> str:
@@ -796,40 +838,42 @@ class JobService:
         }.get(value, value or "UNKNOWN")
 
     def get(self, local_job_id: str, *, refresh: bool = True) -> dict[str, Any]:
-        meta = self._find(local_job_id)
-        slurm_id = meta.get("slurm_job_id")
-        state_info = None
-        if refresh and slurm_id:
-            state_info = self.remote.job_state(str(slurm_id))
-            if state_info:
-                status = self._normalize_state(state_info.get("state", ""))
-                if status and status != meta.get("status"):
-                    meta["status"] = status
-                    self._write_meta(meta)
+        with self._meta_lock:
+            meta = self._find(local_job_id)
+            slurm_id = meta.get("slurm_job_id")
+            state_info = None
+            if refresh and slurm_id:
+                state_info = self.remote.job_state(str(slurm_id))
+                if state_info:
+                    status = self._normalize_state(state_info.get("state", ""))
+                    if status and status != meta.get("status"):
+                        meta["status"] = status
+                        self._write_meta(meta)
 
-        result_info = None
-        if meta.get("status") in _FINAL_STATES:
-            result_info = self.remote.path_info(meta["output_path"]).to_dict()
-        return {
-            "ok": True,
-            "job": self._public_job(meta),
-            "slurm": state_info,
-            "result": result_info,
-        }
+            result_info = None
+            if meta.get("status") in _FINAL_STATES:
+                result_info = self.remote.path_info(meta["output_path"]).to_dict()
+            return {
+                "ok": True,
+                "job": self._public_job(meta),
+                "slurm": state_info,
+                "result": result_info,
+            }
 
     def list(self, limit: int = 50) -> dict[str, Any]:
-        jobs = []
-        for remote_dir in self.remote.list_directories(self.remote.jobs_root):
-            if len(jobs) >= limit:
-                break
-            try:
-                meta = read_job_json(self.remote, remote_dir)
-            except ApiError:
-                continue
-            meta["remote_dir"] = remote_dir
-            jobs.append(self._public_job(meta))
-        jobs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
-        return {"ok": True, "jobs": jobs[:limit], "count": min(len(jobs), limit)}
+        with self._meta_lock:
+            jobs = []
+            for remote_dir in self.remote.list_directories(self.remote.jobs_root):
+                if len(jobs) >= limit:
+                    break
+                try:
+                    meta = read_job_json(self.remote, remote_dir)
+                except ApiError:
+                    continue
+                meta["remote_dir"] = remote_dir
+                jobs.append(self._public_job(meta))
+            jobs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+            return {"ok": True, "jobs": jobs[:limit], "count": min(len(jobs), limit)}
 
     def logs(self, local_job_id: str, max_bytes: int = 128_000) -> dict[str, Any]:
         meta = self._find(local_job_id)
@@ -848,24 +892,26 @@ class JobService:
         Slurm 에는 job 이 남고 우리만 추적을 잃는다 — 그건 취소가 먼저다.
         결과물(output_path)과 데이터셋은 이 폴더 밖이라 그대로 남는다.
         """
-        meta = self._find(local_job_id)
-        if meta.get("status") in _ACTIVE_STATES:
-            raise ApiError(
-                "JOB_STILL_ACTIVE",
-                "진행 중인 작업입니다. 먼저 취소한 뒤 삭제하세요.",
-                status_code=409,
-            )
-        self.remote.delete_job_dir(meta["remote_dir"])
-        return {"ok": True, "deleted": local_job_id}
+        with self._meta_lock:
+            meta = self._find(local_job_id)
+            if meta.get("status") in _ACTIVE_STATES:
+                raise ApiError(
+                    "JOB_STILL_ACTIVE",
+                    "진행 중인 작업입니다. 먼저 취소한 뒤 삭제하세요.",
+                    status_code=409,
+                )
+            self.remote.delete_job_dir(meta["remote_dir"])
+            return {"ok": True, "deleted": local_job_id}
 
     def cancel(self, local_job_id: str) -> dict[str, Any]:
-        meta = self._find(local_job_id)
-        slurm_id = meta.get("slurm_job_id")
-        if not slurm_id:
-            raise ApiError("JOB_NOT_SUBMITTED", "아직 제출되지 않은 작업입니다.", 409)
-        if meta.get("status") in _FINAL_STATES:
-            raise ApiError("JOB_ALREADY_FINISHED", "이미 종료된 작업입니다.", 409)
-        self.remote.cancel(str(slurm_id))
-        meta["status"] = "CANCEL_REQUESTED"
-        self._write_meta(meta)
-        return {"ok": True, "job": self._public_job(meta)}
+        with self._meta_lock:
+            meta = self._find(local_job_id)
+            slurm_id = meta.get("slurm_job_id")
+            if not slurm_id:
+                raise ApiError("JOB_NOT_SUBMITTED", "아직 제출되지 않은 작업입니다.", 409)
+            if meta.get("status") in _FINAL_STATES:
+                raise ApiError("JOB_ALREADY_FINISHED", "이미 종료된 작업입니다.", 409)
+            self.remote.cancel(str(slurm_id))
+            meta["status"] = "CANCEL_REQUESTED"
+            self._write_meta(meta)
+            return {"ok": True, "job": self._public_job(meta)}
