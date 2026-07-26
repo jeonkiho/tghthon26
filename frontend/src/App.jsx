@@ -876,7 +876,7 @@ export default function App() {
       setForm((old) => ({
         ...old,
         partition: old.partition || meData.default_partition || "",
-        output_path: old.output_path === blankForm.output_path && meData.data_root ? `${meData.data_root}/results/${old.name}` : old.output_path,
+        // 결과 경로는 비워두면 서버가 접속 클러스터 기준으로 채운다. placeholder 로 예시만 보여준다.
       }));
     } catch (err) { report(err); }
   }, [report]);
@@ -1177,7 +1177,7 @@ export default function App() {
               </div>
             </Field>
             <label className="switch-row"><button type="button" className="switch on" disabled aria-label="GPU 노드 로컬 복사 필수"><i/></button><div><strong>/local_datasets로 복사·압축 해제</strong><span>튜토리얼 준수를 위해 항상 적용되며 끌 수 없습니다.</span></div></label>
-            <Field label="결과 저장 경로"><input value={form.output_path} onChange={(e) => setForm({...form, output_path: e.target.value})}/></Field>
+            <Field label="결과 저장 경로" hint="비워두면 접속한 서버의 내 폴더 아래로 자동 저장됩니다"><input placeholder={me?.data_root ? `예: ${me.data_root}/results/${form.name || "작업명"}` : "예: <NAS>/<사용자명>/results/작업명"} value={form.output_path} onChange={(e) => setForm({...form, output_path: e.target.value})}/></Field>
           </article>
           <article className="panel form-panel"><SectionTitle number="03" title="GPU와 실행 조건" subtitle="추천 결과는 원본 SERAPH 코어의 sbatch --test-only를 사용합니다."/>
             <div className="resource-grid"><Field label="GPU"><select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value, high_perf: Number(e.target.value) === 0 ? false : form.high_perf})}>{[0,1,2,4,8,16].map(n => <option key={n} value={n}>{n === 0 ? "0 (CPU 전용)" : n}</option>)}</select></Field><Field label={Number(form.gpus) === 0 ? "CPU 수" : "GPU당 CPU"}><input type="number" min="1" value={form.cpus} onChange={(e) => setForm({...form, cpus: e.target.value})}/></Field><Field label={Number(form.gpus) === 0 ? "메모리" : "GPU당 메모리"}><input value={form.memory} onChange={(e) => setForm({...form, memory: e.target.value})}/></Field><Field label="시간 제한"><input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></Field></div>

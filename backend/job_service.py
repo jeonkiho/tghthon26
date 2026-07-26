@@ -239,6 +239,10 @@ class JobService:
             yield str(target), "code.tar.gz"
 
     def validate(self, spec: JobSpec, snapshot: Any) -> dict[str, Any]:
+        # 결과 경로를 비워두면 접속한 클러스터의 내 NAS 아래로 기본값을 채운다.
+        # (prepare 가 validate 를 먼저 부르므로 여기서 채우면 제출까지 이어진다.)
+        if not spec.output_path:
+            spec.output_path = f"{self.remote.data_root}/results/{spec.name}"
         code = self._inspect_local_code(spec)
         dataset = self.remote.path_info(spec.dataset_path)
         output = self.remote.path_info(spec.output_path)

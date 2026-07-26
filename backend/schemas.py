@@ -109,7 +109,7 @@ class JobSpec(StrictModel):
     entrypoint: str = Field(default="train.py", min_length=1, max_length=512)
     arguments: list[str] = Field(default_factory=list, max_length=100)
     dataset_path: str = Field(min_length=1, max_length=4096)
-    output_path: str = Field(min_length=1, max_length=4096)
+    output_path: str = Field(default="", max_length=4096)  # 비우면 서버가 기본값을 채운다
     copy_dataset_to_local: bool = True
     partition: str | None = Field(default=None, max_length=128)
     gpus: int = Field(default=1, ge=0, le=16)  # 0 = CPU 전용
@@ -135,6 +135,8 @@ class JobSpec(StrictModel):
     @field_validator("dataset_path", "output_path")
     @classmethod
     def absolute_remote_path(cls, value: str) -> str:
+        if not value:
+            return value          # output_path 는 비워둘 수 있다(서버가 채운다)
         if any(ord(char) < 32 for char in value):
             raise ValueError("서버 경로에는 제어 문자를 넣을 수 없습니다.")
         path = PurePosixPath(value)
