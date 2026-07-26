@@ -11,7 +11,7 @@ from typing import Annotated, Any
 from anyio import to_thread
 from fastapi import FastAPI, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from seraph import config as config_module
@@ -49,6 +49,28 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 log = logging.getLogger("seraph_gui")
+
+# 화면이 아직 안 만들어졌을 때 보여줄 안내. 빈 404 는 "고장났다"도 "내가 뭘 해야
+# 한다"도 알려주지 않는다.
+_FRONTEND_MISSING_HTML = """<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>SERAPH — 화면 준비 필요</title>
+<style>
+ body{font-family:"Malgun Gothic",system-ui,sans-serif;background:#f4f6fa;color:#182136;
+      margin:0;display:grid;place-items:center;min-height:100vh}
+ main{max-width:560px;padding:32px}
+ h1{font-size:22px;margin:0 0 12px}
+ p{font-size:13px;line-height:1.8;color:#5c6880;margin:0 0 14px}
+ code{background:#e9edf4;border-radius:5px;padding:2px 7px;font-size:12px}
+ a{color:#21bd91}
+</style></head><body><main>
+ <h1>화면이 아직 만들어지지 않았습니다</h1>
+ <p>백엔드는 정상입니다. 화면(<code>frontend/dist</code>)은 저장소에 두지 않고
+    시작할 때 만드는데, 아직 만들어지지 않았습니다.</p>
+ <p><code>start_windows.bat</code> 또는 <code>./start_unix.sh</code> 로 다시 실행하면
+    자동으로 만듭니다. 그래도 안 되면 <a href="https://nodejs.org">Node.js</a> 가
+    설치돼 있는지 확인하세요 — 화면을 만들 때만 필요합니다.</p>
+ <p>API 는 지금도 쓸 수 있습니다: <a href="/api/docs">/api/docs</a></p>
+</main></body></html>"""
 
 
 def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastAPI:
@@ -520,9 +542,16 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     async def cancel_job(local_job_id: LOCAL_JOB_ID) -> dict[str, Any]:
         return await to_thread.run_sync(lambda: jobs.cancel(local_job_id))
 
+    # 화면은 저장소에 커밋하지 않고 시작할 때 만든다(frontend_build.py). 그래서
+    # 아직 안 만들어진 상태로 여기 올 수 있다 — 그때 빈 404 를 주면 사용자는
+    # 무엇이 잘못됐는지 알 수 없다. 무엇을 해야 하는지 말해준다.
     static_dir = ROOT / "frontend" / "dist"
-    if static_dir.is_dir():
+    if (static_dir / "index.html").is_file():
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="gui")
+    else:
+        @app.get("/", include_in_schema=False)
+        async def frontend_missing() -> HTMLResponse:
+            return HTMLResponse(_FRONTEND_MISSING_HTML, status_code=503)
 
     return app
 
