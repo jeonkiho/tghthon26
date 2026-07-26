@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from anyio import to_thread
 from fastapi import FastAPI, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from seraph import config as config_module
@@ -257,6 +259,22 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     @app.delete("/api/v1/envs/{name}")
     async def delete_env(name: ENV_NAME) -> dict[str, Any]:
         return {"ok": True, **await to_thread.run_sync(lambda: envs.delete(name))}
+
+    @app.get("/api/v1/remote/download")
+    async def remote_download(path: str) -> StreamingResponse:
+        """서버 파일을 내 PC 로 내려받는다. 폴더면 tar.gz 로 묶어서 흘려보낸다.
+
+        결과물을 보려고 scp 명령을 외우게 하지 않으려는 것이다. 브라우저의 다운로드
+        기능을 그대로 쓰므로 진행률·이어받기·저장 위치를 브라우저가 처리한다.
+        """
+        remote = jobs.remote
+        stream, meta = await to_thread.run_sync(lambda: remote.open_download(path))
+        # 한글 파일명은 latin-1 헤더에 그대로 못 넣는다. RFC 5987 로 함께 준다.
+        quoted = urllib.parse.quote(meta["filename"])
+        headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}
+        if meta.get("size") is not None:
+            headers["Content-Length"] = str(meta["size"])
+        return StreamingResponse(stream, media_type=meta["media_type"], headers=headers)
 
     @app.get("/api/v1/cluster/status")
     async def cluster_status(partition: str | None = None) -> dict[str, Any]:

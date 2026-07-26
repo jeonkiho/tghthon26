@@ -75,6 +75,7 @@ function Icon({ name, size = 20 }) {
     logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></>,
     box: <><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></>,
     trash: <><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></>,
+    download: <><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -577,6 +578,7 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
   const [sort, setSort] = useState({ key: "name", asc: true });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [copied, setCopied] = useState(null);
 
   const ls = useCallback(async (path, extra = "") => {
     const query = new URLSearchParams({ show_hidden: String(showHidden) });
@@ -621,6 +623,29 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
     } catch { setTreeKids((old) => ({ ...old, [path]: [] })); }
   }, [expanded, treeKids, ls]);
 
+  // 경로 복사. 웹에서 다 되더라도 터미널이나 스크립트에 붙여넣을 일은 남는다.
+  // 화면에 보이는 경로를 손으로 옮겨 적게 하면 거기서 오타가 난다.
+  const copyPath = useCallback(async (path) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(path);
+      window.setTimeout(() => setCopied((old) => (old === path ? null : old)), 1500);
+    } catch {
+      setErr("클립보드에 쓸 수 없습니다. 주소가 localhost 인지 확인해 주세요.");
+    }
+  }, []);
+
+  // 브라우저의 다운로드 기능을 그대로 쓴다. 진행률·저장 위치·이어받기를 우리가
+  // 다시 만들 이유가 없다. 폴더면 서버가 tar.gz 로 묶어서 흘려보낸다.
+  const download = useCallback((path) => {
+    const link = document.createElement("a");
+    link.href = `/api/v1/remote/download?path=${encodeURIComponent(path)}`;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, []);
+
   const look = useCallback(async (entry) => {
     setSelected(entry);
     setPreview(null);
@@ -660,6 +685,14 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
         <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)}/>
         숨김 항목
       </label>
+      <button className="icon-button" onClick={() => copyPath(cwd)} disabled={!cwd}
+        title="이 폴더 경로 복사">
+        <Icon name={copied === cwd ? "check" : "copy"} size={16}/>
+      </button>
+      {!picker && <button className="icon-button" onClick={() => download(cwd)} disabled={!cwd || busy}
+        title="이 폴더를 tar.gz 로 내려받기">
+        <Icon name="download" size={16}/>
+      </button>}
       <button className="icon-button" onClick={() => open(cwd)} disabled={busy} title="새로고침">
         <Icon name="refresh" size={16}/>
       </button>
@@ -705,9 +738,18 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
     {selected && !selected.is_dir && <div className="exp-preview">
       <div className="exp-preview-head">
         <div><strong>{selected.name}</strong><small>{selected.path}</small></div>
-        {picker && <button className="primary compact" disabled={!pickable(selected)}
-          onClick={() => onPick(selected.path)}
-          title={pickable(selected) ? "" : "압축 파일만 데이터로 쓸 수 있습니다"}>이 파일 사용</button>}
+        <div className="exp-preview-actions">
+          <button className="secondary compact" onClick={() => copyPath(selected.path)}>
+            <Icon name={copied === selected.path ? "check" : "copy"} size={15}/>
+            {copied === selected.path ? "복사됨" : "경로 복사"}
+          </button>
+          {!picker && <button className="secondary compact" onClick={() => download(selected.path)}>
+            <Icon name="download" size={15}/> 내려받기
+          </button>}
+          {picker && <button className="primary compact" disabled={!pickable(selected)}
+            onClick={() => onPick(selected.path)}
+            title={pickable(selected) ? "" : "압축 파일만 데이터로 쓸 수 있습니다"}>이 파일 사용</button>}
+        </div>
       </div>
       {preview === null ? <p className="muted">여는 중…</p>
         : preview.error ? <p className="nas-err">{preview.error}</p>

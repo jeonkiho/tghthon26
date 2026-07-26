@@ -383,3 +383,5 @@ button.hrow:hover{background:#f8fafc}
 .crash p{font-size:11px;line-height:1.7;color:var(--muted);margin:0 0 16px}
 .crash pre{background:#101827;color:#b9c6d8;border-radius:9px;padding:14px;font:9px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;max-height:320px;overflow:auto}
 .crash button{margin-top:14px;border:0;border-radius:8px;height:38px;padding:0 18px;background:#21b98e;color:#fff;font-size:11px;font-weight:700}
+.exp-preview-actions{display:flex;gap:6px;flex:none}
+.exp-preview-actions .compact{height:30px;font-size:9px;padding:0 10px}

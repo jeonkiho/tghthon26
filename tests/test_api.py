@@ -1,5 +1,6 @@
 import asyncio
 import io
+import posixpath
 import tarfile
 import time
 from pathlib import Path
@@ -887,3 +888,66 @@ def test_preview_size_cap_cannot_be_raised_by_the_caller():
     app = create_app()
     with TestClient(app) as client:
         assert client.get("/api/v1/remote/file?path=/x&max_bytes=99999999").status_code == 422
+
+
+# --- 내려받기 -----------------------------------------------------------------
+# 결과물을 보려고 scp 명령을 외우게 하지 않는다. 브라우저의 다운로드 기능을 쓰므로
+# 진행률·저장 위치·이어받기는 브라우저가 처리한다.
+
+def test_download_a_file_streams_with_its_real_name_and_size(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        response = client.get(f"/api/v1/remote/download?path={job_dir}/job.json")
+        assert response.status_code == 200
+        assert "filename*=UTF-8''job.json" in response.headers["content-disposition"]
+        # 크기를 알려줘야 브라우저가 진행률을 보여줄 수 있다.
+        assert int(response.headers["content-length"]) == len(response.content)
+        assert response.content.startswith(b"{")
+
+
+def test_download_a_folder_arrives_as_a_tar_of_that_folder(tmp_path):
+    """결과는 보통 폴더다. 파일 하나씩 받게 하면 결국 터미널로 간다."""
+    import io as _io
+    import tarfile as _tarfile
+
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        response = client.get(f"/api/v1/remote/download?path={job_dir}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/gzip"
+        assert response.headers["content-disposition"].endswith(".tar.gz")
+
+        archive = _tarfile.open(fileobj=_io.BytesIO(response.content), mode="r:gz")
+        inside = {name.split("/")[-1] for name in archive.getnames() if "/" in name}
+        assert {"job.json", "job.sbatch"} <= inside
+        # 폴더 이름이 tar 안의 최상위여야 풀었을 때 파일이 흩어지지 않는다.
+        assert archive.getnames()[0] == posixpath.basename(job_dir)
+
+
+def test_download_refuses_paths_that_cannot_be_read():
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/api/v1/remote/download?path=/data/mockuser/nope").status_code == 404
+        assert client.get("/api/v1/remote/download?path=/etc/passwd").status_code == 404
+
+
+def test_download_does_not_hold_the_shared_sftp_channel(tmp_path):
+    """큰 파일을 공유 채널로 내려받으면 전송이 끝날 때까지 화면 전체가 멈춘다.
+
+    SFTP 채널은 잠금으로 직렬화돼 있다(7043dd8). 다운로드는 자기 채널을 열어야
+    하고, 그래야 받는 동안에도 목록과 작업 상태가 돈다.
+    """
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        remote = app.state.jobs.remote
+        stream, meta = remote.open_download(f"{job_dir}/job.json")
+        try:
+            # 스트림을 열어둔 채로 다른 요청이 지나가야 한다.
+            assert client.get("/api/v1/remote/ls").status_code == 200
+            assert client.get("/api/v1/jobs").status_code == 200
+            assert meta["size"] > 0
+        finally:
+            stream.close()
