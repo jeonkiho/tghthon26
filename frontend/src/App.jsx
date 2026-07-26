@@ -250,6 +250,7 @@ function splitList(text) {
 const ENV_SOURCE_LABELS = { personal: "내가 만든 환경", "personal-install": "내 설치", shared: "공용" };
 
 const ENV_MODES = [
+  { id: "spec", label: "코드의 환경 파일로", detail: "environment.yml 이나 requirements.txt 가 있으면 그대로 씁니다. 손으로 옮겨 적지 않아도 됩니다." },
   { id: "clone", label: "기존 환경 복제", detail: "공용 환경의 torch 를 그대로 물려받고 패키지만 추가합니다. 몇 분." },
   { id: "scratch", label: "처음부터 만들기", detail: "파이썬·torch·CUDA 버전을 전부 고릅니다. 15분 이상 걸릴 수 있습니다." },
   { id: "venv", label: "venv (가장 빠름)", detail: "기존 파이썬 위에 얹습니다. 몇 초. 파이썬 버전은 바꿀 수 없습니다." },
@@ -263,9 +264,11 @@ function EnvsPage({ report, onEnvsChanged }) {
   const [build, setBuild] = useState(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
-    mode: "clone", name: "", python: "3.11", source: "",
+    mode: "spec", name: "", python: "3.11", source: "",
     condaText: "", pipText: "", channelsText: "conda-forge",
+    specPath: "", specKind: "",
   });
+  const [detected, setDetected] = useState(null);
 
   const loadEnvs = useCallback(async () => {
     try {
@@ -318,17 +321,34 @@ function EnvsPage({ report, onEnvsChanged }) {
     return () => { stop = true; clearInterval(timer); };
   }, [build?.build_id, build?.state, loadEnvs]);
 
+  // 코드 폴더를 골라 environment.yml / requirements.txt 를 찾는다. 저장소에 이미
+  // 정답이 적혀 있는데 화면에 손으로 옮겨 적게 하는 건 옮겨 적다 틀리라는 뜻이다.
+  const detectSpec = async () => {
+    setBusy(true);
+    try {
+      const found = await api("/api/v1/envs/detect", { method: "POST", timeoutMs: 5 * 60_000 });
+      if (!found.selected) return;
+      setDetected(found);
+      const first = (found.specs || [])[0];
+      setForm((old) => ({ ...old, specPath: first?.path || "", specKind: first?.kind || "" }));
+    } catch (err) { report(err); }
+    finally { setBusy(false); }
+  };
+
   const create = async () => {
     setBusy(true);
     try {
+      const usesForm = form.mode === "scratch";
       const payload = {
         name: form.name.trim(),
         mode: form.mode,
         python: form.python,
-        source: form.mode === "scratch" ? null : (form.source || null),
-        conda_packages: form.mode === "scratch" ? splitList(form.condaText) : [],
-        pip_packages: splitList(form.pipText),
-        channels: form.mode === "scratch" ? splitList(form.channelsText) : ["conda-forge"],
+        source: ["clone", "venv"].includes(form.mode) ? (form.source || null) : null,
+        conda_packages: usesForm ? splitList(form.condaText) : [],
+        pip_packages: form.mode === "spec" ? [] : splitList(form.pipText),
+        channels: usesForm ? splitList(form.channelsText) : ["conda-forge"],
+        spec_path: form.mode === "spec" ? (form.specPath || null) : null,
+        spec_kind: form.mode === "spec" ? (form.specKind || null) : null,
       };
       const data = await api("/api/v1/envs", { method: "POST", body: JSON.stringify(payload) });
       setBuild(data.build);
@@ -354,8 +374,11 @@ function EnvsPage({ report, onEnvsChanged }) {
   const others = envs.filter((e) => e.source !== "personal");
   const running = build?.state === "running";
   const nameTaken = envs.some((e) => e.name === form.name.trim());
+  // 방식마다 갖춰야 하는 게 다르다. scratch 는 폼만으로 되고, clone·venv 는 원본
+  // 환경이, spec 은 고른 파일이 있어야 한다.
+  const modeReady = { scratch: true, spec: Boolean(form.specPath) }[form.mode] ?? Boolean(form.source);
   const canSubmit = !busy && !running && form.name.trim() && !nameTaken
-    && (form.mode === "scratch" || form.source) && tools?.can_create !== false;
+    && modeReady && tools?.can_create !== false;
 
   return <section className="page envs-page">
     <EnvReadiness tools={tools}/>
@@ -416,6 +439,35 @@ function EnvsPage({ report, onEnvsChanged }) {
             <input value={form.channelsText} disabled={running}
               onChange={(e) => setForm({ ...form, channelsText: e.target.value })}/>
           </Field>
+        </> : form.mode === "spec" ? <>
+          <Field label="코드 폴더" hint="environment.yml 이나 requirements.txt 를 찾습니다">
+            <div className="path-input">
+              <input readOnly value={detected?.directory || ""} placeholder="폴더를 고르세요"/>
+              <button onClick={detectSpec} disabled={busy || running}>
+                <Icon name="folder" size={17}/> 폴더 고르기
+              </button>
+            </div>
+          </Field>
+          {detected && !detected.specs?.length && <p className="env-spec-none">
+            <Icon name="warn" size={15}/> 이 폴더에서 environment.yml 이나 requirements.txt 를 찾지 못했습니다.
+            {detected.unsupported?.length ? ` (${detected.unsupported.join(", ")} 은 아직 지원하지 않습니다)` : ""}
+          </p>}
+          {detected?.specs?.map((entry) => <label key={entry.path}
+            className={`env-spec ${form.specPath === entry.path ? "on" : ""}`}>
+            <input type="radio" name="specfile" checked={form.specPath === entry.path} disabled={running}
+              onChange={() => setForm({ ...form, specPath: entry.path, specKind: entry.kind })}/>
+            <div>
+              <strong>{entry.name}</strong>
+              <small>{entry.kind === "conda" ? "conda 환경 파일 — 채널과 버전을 파일이 정합니다"
+                : "pip 목록 — 파이썬 버전은 아래에서 고릅니다"} · {fmtBytes(entry.size)}</small>
+              <pre>{entry.text}{entry.truncated ? "\n…" : ""}</pre>
+            </div>
+          </label>)}
+          {form.specKind === "pip" && <Field label="파이썬 버전" hint="requirements.txt 에는 파이썬 버전이 없어서 직접 고릅니다">
+            <select value={form.python} disabled={running} onChange={(e) => setForm({ ...form, python: e.target.value })}>
+              {(tools?.python_versions || ["3.11"]).map((v) => <option key={v}>{v}</option>)}
+            </select>
+          </Field>}
         </> : <Field label={form.mode === "clone" ? "복제할 환경" : "기반 파이썬"}
           hint={form.mode === "clone" ? "이 환경의 패키지를 그대로 복사합니다" : "이 환경의 파이썬으로 venv 를 만듭니다"}>
           <select value={form.source} disabled={running} onChange={(e) => setForm({ ...form, source: e.target.value })}>
@@ -424,10 +476,10 @@ function EnvsPage({ report, onEnvsChanged }) {
           </select>
         </Field>}
 
-        <Field label="pip 패키지 (선택)" hint="공백으로 구분 · 예: wandb timm==1.0.9">
+        {form.mode !== "spec" && <Field label="pip 패키지 (선택)" hint="공백으로 구분 · 예: wandb timm==1.0.9">
           <input value={form.pipText} disabled={running}
             onChange={(e) => setForm({ ...form, pipText: e.target.value })}/>
-        </Field>
+        </Field>}
 
         <button className="primary full" onClick={create} disabled={!canSubmit}>
           {running ? "만드는 중…" : "이 환경 만들기"} <Icon name="arrow" size={17}/>

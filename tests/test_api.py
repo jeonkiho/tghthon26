@@ -1062,3 +1062,120 @@ def test_announcements_say_when_they_are_only_examples(monkeypatch):
         body = client.get("/api/v1/announcements").json()
         assert body["source"] == "mock"
         assert body["announcements"], "예시 공지는 그대로 보여줘야 화면이 비지 않는다"
+
+
+# --- 코드의 환경 파일로 환경 만들기 ---------------------------------------------
+# 깃에 커밋된 environment.yml / requirements.txt 로 환경을 만드는 건 파이썬 쪽에서
+# 가장 표준적인 방식이다. 저장소에 정답이 적혀 있는데 화면에 손으로 옮겨 적게 하면
+# 옮겨 적다 틀린다.
+
+def _spec_dir(tmp_path):
+    tmp_path.joinpath("environment.yml").write_text(
+        "name: proj\nchannels:\n  - conda-forge\ndependencies:\n  - python=3.11\n",
+        encoding="utf-8")
+    tmp_path.joinpath("requirements.txt").write_text("torch==2.5.1\nwandb\n", encoding="utf-8")
+    tmp_path.joinpath("pyproject.toml").write_text('[project]\nname = "proj"\n', encoding="utf-8")
+    return tmp_path
+
+
+def test_detect_finds_spec_files_and_names_the_ones_it_cannot_use(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.post(f"/api/v1/envs/detect?local_path={_spec_dir(tmp_path)}").json()
+        assert body["selected"] is True
+        # environment.yml 이 먼저다 — 채널과 버전까지 담아서 더 완전하다.
+        assert [s["name"] for s in body["specs"]] == ["environment.yml", "requirements.txt"]
+        assert [s["kind"] for s in body["specs"]] == ["conda", "pip"]
+        # 내용을 미리 보여줘야 무엇으로 만드는지 모른 채 기다리지 않는다.
+        assert "python=3.11" in body["specs"][0]["text"]
+        # 못 쓰는 건 못 쓴다고 말한다. 조용히 무시하면 왜 안 잡히는지 알 수 없다.
+        assert body["unsupported"] == ["pyproject.toml"]
+
+
+def test_detect_on_a_folder_without_specs_is_not_an_error(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.post(f"/api/v1/envs/detect?local_path={tmp_path}").json()
+        assert body["selected"] is True and body["specs"] == []
+
+
+def test_build_from_environment_yml_uploads_the_file(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        spec = _spec_dir(tmp_path) / "environment.yml"
+        made = client.post("/api/v1/envs", json={
+            "name": "fromyml", "mode": "spec", "spec_kind": "conda", "spec_path": str(spec),
+        })
+        assert made.status_code == 200
+        build = made.json()["build"]
+        assert build["spec_name"] == "environment.yml"
+
+        # 서버는 내 PC 경로를 볼 수 없다. 내용이 빌드 폴더로 올라가야 한다.
+        remote = app.state.envs.remote
+        uploaded = remote.read_text(f"{remote.build_dir(build['build_id'])}/spec")
+        assert "python=3.11" in uploaded
+
+
+def test_spec_mode_needs_a_file_that_exists(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        missing = client.post("/api/v1/envs", json={
+            "name": "a", "mode": "spec", "spec_kind": "conda",
+            "spec_path": str(tmp_path / "nope.yml"),
+        })
+        assert missing.status_code == 400
+        assert client.post("/api/v1/envs", json={
+            "name": "b", "mode": "spec", "spec_kind": "conda"}).status_code == 422
+        # 종류는 conda/pip 둘 뿐이다.
+        assert client.post("/api/v1/envs", json={
+            "name": "c", "mode": "spec", "spec_kind": "poetry",
+            "spec_path": str(tmp_path)}).status_code == 422
+
+
+def test_scratch_build_uses_only_the_channels_shown_on_screen(tmp_path):
+    """--override-channels 가 없으면 conda 는 condarc 의 defaults 도 같이 뒤진다.
+
+    화면은 "채널: pytorch nvidia conda-forge" 라고 말해 놓고 실제로는 다른 곳에서도
+    받게 되고, 최신 conda 는 그 채널의 약관 동의를 요구해서 어떤 사람만 실패한다.
+    """
+    from backend.env_service import EnvService
+    from backend.schemas import EnvSpec
+
+    steps = EnvService._steps(
+        EnvSpec(name="a", mode="scratch", channels=["pytorch", "conda-forge"]), "/p", None)
+    assert "--override-channels" in steps
+    assert "-c pytorch" in steps and "-c conda-forge" in steps
+
+    # 채널을 비워도 아무 데서도 못 받는 상태로 만들지 않는다.
+    empty = EnvService._steps(EnvSpec(name="b", mode="scratch", channels=[]), "/p", None)
+    assert "-c conda-forge" in empty
+
+
+def test_known_conda_failures_get_an_explanation():
+    """conda 원문만 보고 무엇을 해야 하는지 알기는 어렵다."""
+    from backend.env_service import _explain_failure
+
+    tos = _explain_failure("CondaToSNonInteractiveError: Terms of Service have not been accepted")
+    assert tos and "약관" in tos
+    assert _explain_failure("PackagesNotFoundError: torch=99")
+    assert _explain_failure("그냥 알 수 없는 오류") is None
+
+
+def test_tos_accept_only_where_we_do_not_choose_the_channels():
+    """남의 이용약관에 대신 동의하는 일은 필요한 곳에서만 한다.
+
+    scratch 는 --override-channels 로 화면에 적힌 채널만 쓰므로 기본 채널에 갈 일이
+    없다. 쓰지도 않을 약관에 동의부터 해 둘 이유가 없다. 반대로 clone·spec 은
+    채널을 우리가 정하지 않으므로 남긴다.
+    """
+    from backend.env_service import EnvService
+    from backend.schemas import EnvSpec
+
+    scratch = EnvService._steps(EnvSpec(name="a", mode="scratch"), "/p", None)
+    assert "tos accept" not in scratch
+    assert "--override-channels" in scratch
+
+    clone = EnvService._steps(EnvSpec(name="b", mode="clone", source="x"), "/p", "/src")
+    assert "tos accept" in clone
+    # 로그를 감추지 않는다 — 대신 동의한 사실이 남아야 한다.
+    assert ">/dev/null" not in clone
