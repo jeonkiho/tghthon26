@@ -1405,6 +1405,10 @@ export default function App() {
         <div className="welcome-strip"><div><span className="live-dot"/>SLACK · {announcements?.channel || "공지"}</div><p>{announcements?.ok === false ? "공지를 불러오지 못했습니다." : "관리자 공지입니다. 노드 점검·정책 변경 등을 확인하세요."}</p><button onClick={loadAnnouncements}>새로고침 <Icon name="refresh" size={15}/></button></div>
         {!announcements && <div className="empty-table"><Icon name="bell" size={28}/><strong>공지를 불러오는 중…</strong></div>}
         {announcements?.ok === false && <div className="notice-error"><Icon name="warn" size={18}/><p>{announcements.message || "Slack 공지를 읽지 못했습니다."}</p></div>}
+        {announcements?.source === "mock" && <div className="notice-mock"><Icon name="warn" size={18}/><div>
+          <strong>예시 공지입니다 — 실제 Slack 이 아닙니다.</strong>
+          <p>SERAPH_SLACK_TOKEN 이 설정되지 않았습니다. 저장소 최상단의 <code>.env</code> 파일에 넣고 백엔드를 다시 시작하세요.</p>
+        </div></div>}
         {announcements?.announcements?.length > 0 && <div className="notice-list">{announcements.announcements.map((a) => <AnnouncementCard key={a.ts} a={a}/>)}</div>}
         {announcements?.ok && !announcements.announcements?.length && <div className="empty-table"><Icon name="bell" size={28}/><strong>공지가 없습니다</strong><span>새 공지가 올라오면 여기에 표시됩니다.</span></div>}
       </section>}

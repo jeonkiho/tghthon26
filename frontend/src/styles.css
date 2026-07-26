@@ -402,3 +402,11 @@ button.hrow:hover{background:#f8fafc}
 .confirm-type b{color:#253047}
 .confirm-card .button-row{border:0;padding-top:16px}
 .confirm-delete{width:auto;padding:0 18px;height:40px}
+
+/* 예시 공지 안내. 토큰이 없어 mock 이 나가는 걸 조용히 넘기면, 토큰을 넣어두고도
+   왜 안 바뀌는지 알 수가 없다. */
+.notice-mock{display:flex;align-items:flex-start;gap:10px;margin-top:14px;border:1px solid #f2dca8;background:#fff8e8;border-radius:10px;padding:13px 15px}
+.notice-mock>svg{flex:none;margin-top:2px;color:#b97c20}
+.notice-mock strong{display:block;font-size:11px;color:#8a5d12}
+.notice-mock p{font-size:10px;line-height:1.6;color:#9a7534;margin:5px 0 0}
+.notice-mock code{background:#fdefd2;border-radius:4px;padding:1px 5px;font-size:9px}

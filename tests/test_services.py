@@ -1,5 +1,6 @@
 """config / lint / sbatch / notify / tutorial 테스트."""
 
+import os
 import pathlib
 import sys
 
@@ -512,3 +513,46 @@ def test_job_state_survives_accounting_db_outage():
     remote = SSHRemote.__new__(SSHRemote)   # __init__ 은 실제 SSH/SFTP 를 연다
     remote.connection = _Conn()
     assert remote.job_state('131837') is None
+
+
+# --- .env 로딩 ---------------------------------------------------------------
+# 시작 스크립트에서만 불러오면 그 스크립트를 거치지 않는 실행은 전부 토큰을 못 본다.
+# 실제로 토큰을 넣어두고도 공지가 계속 mock 으로 나왔다.
+
+def test_env_file_strips_quotes_that_the_shell_would_have_removed(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text(
+        "# 주석\n"
+        "\n"
+        "SERAPH_SLACK_TOKEN='xoxb-quoted'\n"
+        'OTHER="double"\n'
+        "export EXPORTED=with-export\n"
+        "BARE=plain\n",
+        encoding="utf-8",
+    )
+    for key in ("SERAPH_SLACK_TOKEN", "OTHER", "EXPORTED", "BARE"):
+        monkeypatch.delenv(key, raising=False)
+
+    loaded = config_module.load_env_file(env)
+
+    # 따옴표가 값에 남으면 Slack 이 invalid_auth 로 죽는데, 원인을 찾기 어렵다.
+    assert loaded["SERAPH_SLACK_TOKEN"] == "xoxb-quoted"
+    assert loaded["OTHER"] == "double"
+    assert loaded["EXPORTED"] == "with-export"
+    assert loaded["BARE"] == "plain"
+    assert os.environ["SERAPH_SLACK_TOKEN"] == "xoxb-quoted"
+
+
+def test_env_file_does_not_override_what_is_already_set(tmp_path, monkeypatch):
+    """이미 export 한 값이 파일에 덮이면, 임시로 바꿔 띄우는 방법이 사라진다."""
+    env = tmp_path / ".env"
+    env.write_text("SERAPH_SLACK_TOKEN=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("SERAPH_SLACK_TOKEN", "from-shell")
+
+    config_module.load_env_file(env)
+
+    assert os.environ["SERAPH_SLACK_TOKEN"] == "from-shell"
+
+
+def test_missing_env_file_is_not_an_error(tmp_path):
+    assert config_module.load_env_file(tmp_path / "nope.env") == {}
