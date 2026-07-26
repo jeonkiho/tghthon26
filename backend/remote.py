@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import pathlib
@@ -10,6 +11,7 @@ import re
 import shlex
 import shutil
 import stat
+import tarfile
 import threading
 import tempfile
 import time
@@ -33,6 +35,10 @@ _JOB_ID = re.compile(r"^[0-9]+$")
 
 # 미리보기 상한. 로그 한 줄 보려고 수 GB 짜리 체크포인트를 끌어오면 안 된다.
 PREVIEW_MAX_BYTES = 256 * 1024
+
+# 다운로드는 상한이 없다(체크포인트를 가져오는 게 목적이다). 대신 한 번에 이만큼씩
+# 흘려보내 백엔드 메모리에 파일 전체가 올라오지 않게 한다.
+DOWNLOAD_CHUNK_BYTES = 256 * 1024
 
 
 def _MOCK_PUBLIC_ENTRIES(path: str) -> list[dict[str, Any]]:
@@ -265,6 +271,40 @@ class MockRemote:
             "data_root": self.data_root,
             "datasets_root": self.datasets_root,
             "home": self._home,
+        }
+
+    def open_download(self, path: str) -> tuple[Any, dict[str, Any]]:
+        clean = posixpath.normpath(path)
+        if not self._inside_sandbox(clean):
+            raise ApiError(
+                "REMOTE_FILE_NOT_READABLE",
+                "실서버에 연결해야 내려받을 수 있습니다.",
+                status_code=404,
+            )
+        target = self._local(clean)
+        name = posixpath.basename(clean) or "download"
+        if target.is_dir():
+            buffer = io.BytesIO()
+            with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+                archive.add(target, arcname=name)
+            data = buffer.getvalue()
+            return iter([data]), {
+                "filename": f"{name}.tar.gz", "size": None, "media_type": "application/gzip",
+            }
+        if not target.is_file():
+            raise ApiError("REMOTE_FILE_NOT_READABLE", f"'{clean}' 를 읽을 수 없습니다.", 404)
+
+        def chunks():
+            with target.open("rb") as handle:
+                while True:
+                    block = handle.read(DOWNLOAD_CHUNK_BYTES)
+                    if not block:
+                        return
+                    yield block
+        return chunks(), {
+            "filename": name,
+            "size": target.stat().st_size,
+            "media_type": "application/octet-stream",
         }
 
     def _inside_sandbox(self, path: str) -> bool:
@@ -609,6 +649,78 @@ class SSHRemote:
             "datasets_root": self.datasets_root,
             "home": self._home,
         }
+
+    def open_download(self, path: str) -> tuple[Any, dict[str, Any]]:
+        """내 PC 로 내려받을 바이트 흐름을 연다. 파일은 그대로, 폴더는 tar.gz 로.
+
+        **공유 SFTP 채널을 쓰지 않는다.** 그 채널은 잠금으로 직렬화돼 있어서
+        (7043dd8), 몇 GB 짜리 체크포인트를 그걸로 내려받으면 전송이 끝날 때까지
+        작업 상태도 목록도 전부 멈춘다. 다운로드마다 자기 채널을 연다.
+        """
+        clean = posixpath.normpath(path)
+        with self._sftp_lock:
+            try:
+                info = self.sftp.stat(clean)
+            except OSError as exc:
+                raise ApiError(
+                    "REMOTE_FILE_NOT_READABLE",
+                    f"'{clean}' 를 읽을 수 없습니다. 경로나 권한을 확인하세요.",
+                    status_code=404,
+                ) from exc
+        name = posixpath.basename(clean) or "download"
+        if stat.S_ISDIR(info.st_mode or 0):
+            return self._stream_archive(clean, name), {
+                "filename": f"{name}.tar.gz",
+                # tar 를 만들면서 흘려보내므로 최종 크기를 미리 알 수 없다.
+                "size": None,
+                "media_type": "application/gzip",
+            }
+        return self._stream_file(clean, int(info.st_size or 0)), {
+            "filename": name,
+            "size": int(info.st_size or 0),
+            "media_type": "application/octet-stream",
+        }
+
+    def _stream_file(self, path: str, size: int) -> Any:
+        sftp = self.connection.client.open_sftp()
+        handle = sftp.file(path, "rb")
+        # prefetch 가 없으면 왕복 지연 때문에 큰 파일이 몇 배로 느려진다.
+        handle.prefetch(size)
+
+        def chunks():
+            try:
+                while True:
+                    block = handle.read(DOWNLOAD_CHUNK_BYTES)
+                    if not block:
+                        return
+                    yield block
+            finally:
+                try:
+                    handle.close()
+                finally:
+                    sftp.close()
+        return chunks()
+
+    def _stream_archive(self, path: str, name: str) -> Any:
+        # 서버에 tar 파일을 만들지 않는다. 만들면 남의 NAS 에 쓰레기를 쌓고,
+        # 도중에 그만두면 그게 그대로 남는다. 만들면서 바로 흘려보낸다.
+        parent = posixpath.dirname(path) or "/"
+        command = f"tar -czf - -C {shlex.quote(parent)} -- {shlex.quote(name)}"
+        _, stdout, _ = self.connection.client.exec_command(command, timeout=None)
+
+        def chunks():
+            try:
+                while True:
+                    block = stdout.read(DOWNLOAD_CHUNK_BYTES)
+                    if not block:
+                        return
+                    yield block
+            finally:
+                try:
+                    stdout.channel.close()
+                except Exception:                # noqa: BLE001 - 이미 닫혔으면 그만이다
+                    pass
+        return chunks()
 
     def _link_is_dir(self, path: str) -> bool:
         with self._sftp_lock:
