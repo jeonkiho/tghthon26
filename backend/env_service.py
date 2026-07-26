@@ -282,6 +282,18 @@ class EnvService:
         quoted_prefix = shlex.quote(prefix)
         lines: list[str] = []
 
+        if spec.mode in ("scratch", "clone"):
+            # conda 26+ 는 기본 채널(main/r) 이용약관 동의를 요구한다. -y 비대화형
+            # 실행이라 미동의면 CondaToSNonInteractiveError 로 바로 실패한다. 빌드 전에
+            # best-effort 로 동의해 둔다(구버전 conda 는 tos 서브커맨드가 없어 실패할 수
+            # 있으므로 || true 로 무시한다 — run 이 아니라 실패해도 빌드는 계속한다).
+            lines.append("say 'conda 채널 약관을 확인합니다.'")
+            for _tos_channel in ("https://repo.anaconda.com/pkgs/main",
+                                 "https://repo.anaconda.com/pkgs/r"):
+                lines.append(
+                    f'"$CONDA_BIN" tos accept --override-channels '
+                    f"--channel {_tos_channel} >/dev/null 2>&1 || true")
+
         if spec.mode == "scratch":
             args = ['"$CONDA_BIN"', "create", "-y", "-p", quoted_prefix, f"python={spec.python}"]
             args += [shlex.quote(pkg) for pkg in spec.conda_packages]
