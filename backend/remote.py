@@ -436,9 +436,13 @@ class MockRemote:
         script = self._local(f"{remote_dir}/preflight.sh")
         if not script.is_file():
             raise ApiError("JOB_NOT_PREPARED", "srun 사전 점검 스크립트를 찾을 수 없습니다.", 409)
+        if gpus and gpus > 0:
+            res = f"gpu={gpus} cpu-per-gpu={cpus} mem-per-gpu={memory}"
+        else:
+            res = f"cpu-only cpus-per-task={cpus} mem={memory}"
         return (
             f"[mock] srun preflight on {node or 'automatic-node'}\n"
-            f"[mock] partition={partition} gpu={gpus} cpu-per-gpu={cpus} mem-per-gpu={memory}\n"
+            f"[mock] partition={partition} {res}\n"
             "SERAPH srun preflight OK\n"
         )
 
@@ -951,13 +955,21 @@ class SSHRemote:
         node: str | None,
     ) -> str:
         clean = self._guard_job_path(remote_dir)
-        gres = f"gpu:high_perf:{gpus}" if high_perf else f"gpu:{gpus}"
-        args = [
-            "srun",
-            "--ntasks=1",
-            f"--gres={gres}",
-            f"--cpus-per-gpu={cpus}",
-            f"--mem-per-gpu={memory}",
+        args = ["srun", "--ntasks=1"]
+        if gpus and gpus > 0:
+            gres = f"gpu:high_perf:{gpus}" if high_perf else f"gpu:{gpus}"
+            args += [
+                f"--gres={gres}",
+                f"--cpus-per-gpu={cpus}",
+                f"--mem-per-gpu={memory}",
+            ]
+        else:
+            # CPU 전용: GRES 없이 태스크 단위로 요청 (sbatch 스크립트와 동일 규칙).
+            args += [
+                f"--cpus-per-task={cpus}",
+                f"--mem={memory}",
+            ]
+        args += [
             f"--partition={partition}",
             "--time=00:05:00",
             "--kill-on-bad-exit=1",

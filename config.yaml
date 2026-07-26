@@ -45,7 +45,7 @@ lint:
     - /home/        # 설정 파일 외에는 두지 않는다
 
 storage:
-  data_root: /data
+  data_root: /nas2/data
   local_datasets_root: /local_datasets
 
 sbatch:
@@ -57,7 +57,7 @@ sbatch:
 
 slack:
   # TUI 에서 보여줄 Slack 공지 채널. 이름(#없이) 또는 채널 ID.
-  channel: 공지
+  channel: C0BHXSW06SK
   limit: 10
 
   # 토큰은 여기 적지 않는다. 이 파일은 커밋되기 때문이다.

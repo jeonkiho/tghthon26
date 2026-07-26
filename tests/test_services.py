@@ -46,7 +46,7 @@ def test_env_var_beats_config_file_for_secret(tmp_path, monkeypatch):
 def test_real_config_yaml_loads():
     cfg = config_module.load()
     assert '/data/' in cfg.blocked_paths
-    assert cfg.data_root == '/data'
+    assert cfg.data_root == '/nas2/data'
     assert cfg.local_datasets_root == '/local_datasets'
 
 

@@ -60,14 +60,26 @@ def pick_standard_node(snapshot, partition, gpus):
 
 def _sbatch_lines(*, name, partition, gpus, high_perf, cpus, mem, time_limit,
                   node, output, error=None):
-    gres = f'gpu:{HIGH_PERF}:{gpus}' if high_perf else f'gpu:{gpus}'
     lines = [
         '#!/usr/bin/bash',
         f'#SBATCH --job-name={name}',
         f'#SBATCH --partition={partition}',
-        f'#SBATCH --gres={gres}',
-        f'#SBATCH --cpus-per-gpu={cpus}',
-        f'#SBATCH --mem-per-gpu={mem}',
+    ]
+    if gpus and gpus > 0:
+        gres = f'gpu:{HIGH_PERF}:{gpus}' if high_perf else f'gpu:{gpus}'
+        lines += [
+            f'#SBATCH --gres={gres}',
+            f'#SBATCH --cpus-per-gpu={cpus}',
+            f'#SBATCH --mem-per-gpu={mem}',
+        ]
+    else:
+        # CPU 전용: GPU GRES 없이 태스크 단위로 CPU·메모리를 요청한다.
+        # (세라프엔 CPU 전용 파티션이 따로 없어서 같은 파티션에 GPU 없이 낸다.)
+        lines += [
+            f'#SBATCH --cpus-per-task={cpus}',
+            f'#SBATCH --mem={mem}',
+        ]
+    lines += [
         f'#SBATCH --time={time_limit}',
         f'#SBATCH --output={output}',
     ]
@@ -100,7 +112,7 @@ def generate_sbatch(snapshot, *, name, command, partition=None, gpus=1,
     output = output or defaults['output_pattern']
 
     auto_selected = False
-    if not high_perf and not node:
+    if gpus and gpus > 0 and not high_perf and not node:
         node = pick_standard_node(snapshot, partition, gpus)
         auto_selected = node is not None
 
@@ -114,7 +126,7 @@ def generate_sbatch(snapshot, *, name, command, partition=None, gpus=1,
         node=node,
     )
 
-    if not high_perf and not node:
+    if gpus and gpus > 0 and not high_perf and not node:
         lint['problems'].append({
             'level': 'block',
             'code': 'NO_ELIGIBLE_NODE',

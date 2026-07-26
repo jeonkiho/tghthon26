@@ -62,7 +62,7 @@ class ConnectRequest(StrictModel):
 
 
 class RecommendationRequest(StrictModel):
-    gpus: int = Field(default=1, ge=1, le=16)
+    gpus: int = Field(default=1, ge=0, le=16)  # 0 = CPU 전용
     hours: float = Field(default=2.0, gt=0, le=144)
     high_perf: bool = False
     node: str | None = Field(default=None, max_length=128)
@@ -72,7 +72,7 @@ class PreviewRequest(StrictModel):
     name: str
     command: str = Field(min_length=1, max_length=2000)
     partition: str | None = Field(default=None, max_length=128)
-    gpus: int = Field(default=1, ge=1, le=16)
+    gpus: int = Field(default=1, ge=0, le=16)  # 0 = CPU 전용
     high_perf: bool = False
     cpus: int = Field(default=8, ge=1, le=256)
     memory: str = "32G"
@@ -112,7 +112,7 @@ class JobSpec(StrictModel):
     output_path: str = Field(min_length=1, max_length=4096)
     copy_dataset_to_local: bool = True
     partition: str | None = Field(default=None, max_length=128)
-    gpus: int = Field(default=1, ge=1, le=16)
+    gpus: int = Field(default=1, ge=0, le=16)  # 0 = CPU 전용
     high_perf: bool = False
     cpus: int = Field(default=8, ge=1, le=256)
     memory: str = "32G"

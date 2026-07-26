@@ -158,13 +158,11 @@ function QuotaPanel({ usage, me }) {
 // 접속 화면. 사용자에게 ariel/moana 중 무엇을 쓸지 묻지 않는다 — 학과 × 신분으로 이미
 // 정해지는 값이라(서버 clusters.routing_table()), 학과·신분·교내외만 받고 호스트/포트는 자동으로 정한다.
 // 규칙에서 벗어나는 계정을 위해 "직접 지정" 도 남겨둔다.
-const FALLBACK_POSITIONS = [{ key: "undergrad", label: "학부생" }, { key: "grad", label: "대학원생" }];
 const FALLBACK_PORTS = { on_campus: 22, off_campus: 30080 };
 
 function ConnectCard({ mode, clusters, routing, health, loading, onConnect }) {
   const [username, setUsername] = useState(health?.ssh_username || "");
-  const [major, setMajor] = useState("");
-  const [position, setPosition] = useState("undergrad");
+  const [cluster, setCluster] = useState("");
   const [offCampus, setOffCampus] = useState(true);
   const [manual, setManual] = useState(false);
   const [host, setHost] = useState(health?.ssh_host || "");
@@ -172,9 +170,7 @@ function ConnectCard({ mode, clusters, routing, health, loading, onConnect }) {
   const [password, setPassword] = useState("");
 
   const ports = routing?.ssh_ports || FALLBACK_PORTS;
-  const positions = routing?.positions?.length ? routing.positions : FALLBACK_POSITIONS;
-  const autoCluster = routing && major ? routing.assign[`${major}:${position}`] : null;
-  const autoHost = autoCluster ? clusters?.[autoCluster]?.host : null;
+  const autoHost = cluster ? clusters?.[cluster]?.host : null;
   const autoPort = offCampus ? ports.off_campus : ports.on_campus;
   const effHost = manual ? host : autoHost || "";
   const effPort = manual ? port : String(autoPort);
@@ -185,24 +181,21 @@ function ConnectCard({ mode, clusters, routing, health, loading, onConnect }) {
     <div className="connect-logo"><Icon name="server" size={30}/></div>
     <p className="eyebrow">SERAPH CONNECTION</p>
     <h2>서버 연결이 필요합니다</h2>
-    <p>학과와 신분을 고르면 접속할 클러스터를 자동으로 정합니다. 비밀번호는 저장하지 않습니다.</p>
+    <p>사용할 서버를 고르면 접속 주소를 자동으로 정합니다. 비밀번호는 저장하지 않습니다.</p>
     {mode === "ssh" && <>
       <input autoComplete="username" placeholder="SERAPH 사용자명" value={username} onChange={(e) => setUsername(e.target.value)}/>
-      <select value={major} onChange={(e) => setMajor(e.target.value)} aria-label="학과">
-        <option value="">학과 선택</option>
-        {(routing?.majors || []).map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+      <select value={cluster} onChange={(e) => setCluster(e.target.value)} aria-label="서버">
+        <option value="">사용할 서버 선택</option>
+        {Object.values(clusters || {}).map((c) => <option key={c.name} value={c.name}>{c.name} · {c.host}</option>)}
       </select>
-      <div className="seg-row" role="group" aria-label="신분">
-        {positions.map((p) => <button key={p.key} type="button" className={position === p.key ? "on" : ""} onClick={() => setPosition(p.key)}>{p.label}</button>)}
-      </div>
       <div className="seg-row" role="group" aria-label="접속 위치">
         <button type="button" className={offCampus ? "" : "on"} onClick={() => setOffCampus(false)}>교내 · {ports.on_campus}</button>
         <button type="button" className={offCampus ? "on" : ""} onClick={() => setOffCampus(true)}>교외 · {ports.off_campus}</button>
       </div>
-      <div className={`connect-target ${!manual && autoCluster ? "ok" : ""}`}>
+      <div className={`connect-target ${!manual && cluster ? "ok" : ""}`}>
         {manual ? "직접 지정한 주소로 접속합니다."
-          : autoCluster ? <><strong>{autoCluster}</strong> 클러스터 · <code>{autoHost}:{autoPort}</code></>
-          : "학과를 선택하면 접속할 클러스터가 정해집니다."}
+          : cluster ? <><strong>{cluster}</strong> 클러스터 · <code>{autoHost}:{autoPort}</code></>
+          : "사용할 서버를 선택하세요."}
       </div>
       {manual && <div className="connect-endpoint">
         <select value={host} onChange={(e) => setHost(e.target.value)} aria-label="호스트">
@@ -772,7 +765,7 @@ const PAGE_TITLES = {
 
 const blankForm = {
   name: "image-train", local_code_path: "", entrypoint: "train.py", argsText: "--data\n{dataset}\n--output\n{output}",
-  dataset_path: "/data/datasets/tarfiles/images.tar.gz", output_path: "/data/사용자명/results/image-train",
+  dataset_path: "", output_path: "",
   copy_dataset_to_local: true, partition: "", gpus: 1, high_perf: false, cpus: 8, memory: "32G",
   time_limit: "02:00:00", node: "", conda_env: "",
 };
@@ -883,7 +876,7 @@ export default function App() {
       setForm((old) => ({
         ...old,
         partition: old.partition || meData.default_partition || "",
-        output_path: old.output_path === blankForm.output_path ? `/data/${meData.user}/results/${old.name}` : old.output_path,
+        output_path: old.output_path === blankForm.output_path ? `/nas2/data/${meData.user}/results/${old.name}` : old.output_path,
       }));
     } catch (err) { report(err); }
   }, [report]);
@@ -1083,12 +1076,15 @@ export default function App() {
 
   // 정렬한 뒤에 자르므로, '사용 가능순'이면 여유 많은 노드 8개가 위로 온다(-w 로 고를 노드 찾기).
   const visibleNodes = useMemo(() => {
-    const list = [...(cluster?.nodes?.length ? cluster.nodes : nodes)];
+    let list = [...(cluster?.nodes?.length ? cluster.nodes : nodes)];
+    // 고성능 GPU 를 못 쓰는(QOS 한도 0) 사용자에겐 고성능 노드를 감춘다. 쓸 수 없는
+    // 노드를 '사용 가능'처럼 보여주면 안 된다. (한도가 null=불명이면 감추지 않는다.)
+    if (usage?.high_perf_limit === 0) list = list.filter((n) => !n.is_high_perf);
     const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
     const cmp = NODE_SORTS[nodeSort]?.cmp;
     list.sort(cmp ? (a, b) => cmp(a, b) || byName(a, b) : byName);
     return list.slice(0, 8);
-  }, [cluster, nodes, nodeSort]);
+  }, [cluster, nodes, nodeSort, usage]);
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -1123,7 +1119,7 @@ export default function App() {
           </article>
           <article className="panel quick-panel"><div className="panel-head"><div><p className="eyebrow">QUICK START</p><h2>빠른 실행 추천</h2></div><div className="spark-badge"><Icon name="spark" size={17}/></div></div>
             <p className="muted">Slurm의 실제 스케줄러에 물어보고 가장 빠른 파티션과 노드를 찾습니다.</p>
-            <div className="quick-controls"><label>GPU 수<select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value})}>{[1,2,4,8,16].map(n => <option key={n}>{n}</option>)}</select></label><label>예상 시간<input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></label></div>
+            <div className="quick-controls"><label>GPU 수<select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value, high_perf: Number(e.target.value) === 0 ? false : form.high_perf})}>{[0,1,2,4,8,16].map(n => <option key={n} value={n}>{n === 0 ? "0 (CPU)" : n}</option>)}</select></label><label>예상 시간<input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></label></div>
             <button className="primary full" onClick={recommend} disabled={loading}><Icon name="spark" size={18}/> 가장 빠른 위치 찾기</button>
             {recommendation && <div className={`recommend-box ${recommendation.can_start_now ? "now" : "wait"}`}><span>{recommendation.can_start_now ? "지금 실행 가능" : "추천 위치"}</span><strong>{recommendation.best ? `${recommendation.best.partition} · ${recommendation.best.node}` : "조건에 맞는 위치 없음"}</strong><p>{recommendation.headline}</p></div>}
           </article>
@@ -1175,7 +1171,7 @@ export default function App() {
           <article className="panel form-panel"><SectionTitle number="02" title="데이터와 결과" subtitle="대용량 데이터는 업로드하지 않고 기존 NAS 경로를 사용합니다."/>
             <Field label="NAS 데이터 경로" hint="압축 파일 하나 · 찾아보기로 고르거나 내 PC에서 올릴 수 있습니다">
               <div className="path-input">
-                <input placeholder="예: /data/사용자명/datasets/images.tar.gz" value={form.dataset_path} onChange={(e) => setForm({...form, dataset_path: e.target.value})}/>
+                <input placeholder="예: /nas2/data/<사용자명>/datasets/images.tar.gz" value={form.dataset_path} onChange={(e) => setForm({...form, dataset_path: e.target.value})}/>
                 <button onClick={() => setNasOpen(true)}><Icon name="folder" size={17}/> 찾아보기</button>
                 <button onClick={uploadDataset} disabled={uploading}>{uploading ? "올리는 중…" : "올리기"}</button>
               </div>
@@ -1184,8 +1180,8 @@ export default function App() {
             <Field label="결과 저장 경로"><input value={form.output_path} onChange={(e) => setForm({...form, output_path: e.target.value})}/></Field>
           </article>
           <article className="panel form-panel"><SectionTitle number="03" title="GPU와 실행 조건" subtitle="추천 결과는 원본 SERAPH 코어의 sbatch --test-only를 사용합니다."/>
-            <div className="resource-grid"><Field label="GPU"><select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value})}>{[1,2,4,8,16].map(n => <option key={n}>{n}</option>)}</select></Field><Field label="GPU당 CPU"><input type="number" min="1" value={form.cpus} onChange={(e) => setForm({...form, cpus: e.target.value})}/></Field><Field label="GPU당 메모리"><input value={form.memory} onChange={(e) => setForm({...form, memory: e.target.value})}/></Field><Field label="시간 제한"><input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></Field></div>
-            <label className="check-row"><input type="checkbox" checked={form.high_perf} onChange={(e) => setForm({...form, high_perf: e.target.checked})}/><span><strong>고성능 GPU 요청</strong><small>별도 권한이 있는 사용자만 선택</small></span></label>
+            <div className="resource-grid"><Field label="GPU"><select value={form.gpus} onChange={(e) => setForm({...form, gpus: e.target.value, high_perf: Number(e.target.value) === 0 ? false : form.high_perf})}>{[0,1,2,4,8,16].map(n => <option key={n} value={n}>{n === 0 ? "0 (CPU 전용)" : n}</option>)}</select></Field><Field label={Number(form.gpus) === 0 ? "CPU 수" : "GPU당 CPU"}><input type="number" min="1" value={form.cpus} onChange={(e) => setForm({...form, cpus: e.target.value})}/></Field><Field label={Number(form.gpus) === 0 ? "메모리" : "GPU당 메모리"}><input value={form.memory} onChange={(e) => setForm({...form, memory: e.target.value})}/></Field><Field label="시간 제한"><input value={form.time_limit} onChange={(e) => setForm({...form, time_limit: e.target.value})}/></Field></div>
+            {Number(form.gpus) !== 0 && <label className="check-row"><input type="checkbox" checked={form.high_perf} onChange={(e) => setForm({...form, high_perf: e.target.checked})}/><span><strong>고성능 GPU 요청</strong><small>별도 권한이 있는 사용자만 선택</small></span></label>}
             <div className="field-grid"><Field label="파티션"><select value={form.partition} onChange={(e) => setForm({...form, partition: e.target.value})}><option value="">자동 선택</option>{Object.entries(partitions).map(([name, item]) => <option key={name} value={name} disabled={!item.can_use}>{name}{!item.can_use ? " · 권한 없음" : ""}</option>)}</select></Field><Field label="노드 (선택)"><input placeholder="추천 시 자동 입력" value={form.node} onChange={(e) => setForm({...form, node: e.target.value})}/></Field></div>
             <div className="button-row"><button className="secondary" onClick={recommend} disabled={loading}><Icon name="spark" size={18}/> 위치 추천</button><button className="secondary" onClick={validate} disabled={loading}><Icon name="check" size={18}/> 설정 검사</button><button className="primary" onClick={prepare} disabled={loading}>업로드하고 준비 <Icon name="arrow" size={17}/></button></div>
           </article>
