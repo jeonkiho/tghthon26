@@ -1,5 +1,6 @@
 import asyncio
 import io
+import posixpath
 import tarfile
 import time
 from pathlib import Path
@@ -888,3 +889,159 @@ def test_preview_size_cap_cannot_be_raised_by_the_caller():
     app = create_app()
     with TestClient(app) as client:
         assert client.get("/api/v1/remote/file?path=/x&max_bytes=99999999").status_code == 422
+
+
+# --- 내려받기 -----------------------------------------------------------------
+# 결과물을 보려고 scp 명령을 외우게 하지 않는다. 브라우저의 다운로드 기능을 쓰므로
+# 진행률·저장 위치·이어받기는 브라우저가 처리한다.
+
+def test_download_a_file_streams_with_its_real_name_and_size(tmp_path):
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        response = client.get(f"/api/v1/remote/download?path={job_dir}/job.json")
+        assert response.status_code == 200
+        assert "filename*=UTF-8''job.json" in response.headers["content-disposition"]
+        # 크기를 알려줘야 브라우저가 진행률을 보여줄 수 있다.
+        assert int(response.headers["content-length"]) == len(response.content)
+        assert response.content.startswith(b"{")
+
+
+def test_download_a_folder_arrives_as_a_tar_of_that_folder(tmp_path):
+    """결과는 보통 폴더다. 파일 하나씩 받게 하면 결국 터미널로 간다."""
+    import io as _io
+    import tarfile as _tarfile
+
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        response = client.get(f"/api/v1/remote/download?path={job_dir}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/gzip"
+        assert response.headers["content-disposition"].endswith(".tar.gz")
+
+        archive = _tarfile.open(fileobj=_io.BytesIO(response.content), mode="r:gz")
+        inside = {name.split("/")[-1] for name in archive.getnames() if "/" in name}
+        assert {"job.json", "job.sbatch"} <= inside
+        # 폴더 이름이 tar 안의 최상위여야 풀었을 때 파일이 흩어지지 않는다.
+        assert archive.getnames()[0] == posixpath.basename(job_dir)
+
+
+def test_download_refuses_paths_that_cannot_be_read():
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/api/v1/remote/download?path=/data/mockuser/nope").status_code == 404
+        assert client.get("/api/v1/remote/download?path=/etc/passwd").status_code == 404
+
+
+def test_download_does_not_hold_the_shared_sftp_channel(tmp_path):
+    """큰 파일을 공유 채널로 내려받으면 전송이 끝날 때까지 화면 전체가 멈춘다.
+
+    SFTP 채널은 잠금으로 직렬화돼 있다(7043dd8). 다운로드는 자기 채널을 열어야
+    하고, 그래야 받는 동안에도 목록과 작업 상태가 돈다.
+    """
+    app = create_app()
+    with TestClient(app) as client:
+        job_dir = _prepared_job_dir(client, tmp_path)
+        remote = app.state.jobs.remote
+        stream, meta = remote.open_download(f"{job_dir}/job.json")
+        try:
+            # 스트림을 열어둔 채로 다른 요청이 지나가야 한다.
+            assert client.get("/api/v1/remote/ls").status_code == 200
+            assert client.get("/api/v1/jobs").status_code == 200
+            assert meta["size"] > 0
+        finally:
+            stream.close()
+
+
+# --- 탐색기 쓰기 ---------------------------------------------------------------
+# 이 도구의 첫 파괴적 기능이다. NAS 에는 휴지통이 없어서 한 번 지우면 끝이라,
+# 경계와 확인 절차가 기능 자체보다 중요하다.
+
+def test_make_rename_upload_and_delete_round_trip(tmp_path):
+    source = tmp_path / "note.txt"
+    source.write_bytes(b"hello\n")        # 줄바꿈 변환 없이 크기를 고정한다
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        assert client.post("/api/v1/remote/mkdir",
+                           json={"path": root, "name": "work"}).status_code == 200
+        renamed = client.post("/api/v1/remote/rename",
+                              json={"path": f"{root}/work", "new_name": "work2"})
+        assert renamed.status_code == 200 and renamed.json()["path"] == f"{root}/work2"
+
+        up = client.post(
+            f"/api/v1/remote/upload?path={root}/work2&local_path={source}").json()
+        assert up["selected"] is True and up["file"]["size"] == 6
+
+        listed = client.get(f"/api/v1/remote/ls?path={root}/work2").json()["entries"]
+        assert [e["name"] for e in listed] == ["note.txt"]
+
+        assert client.post("/api/v1/remote/delete",
+                           json={"path": f"{root}/work2"}).status_code == 200
+        after = client.get(f"/api/v1/remote/ls?path={root}").json()["entries"]
+        assert "work2" not in [e["name"] for e in after]
+
+
+def test_describe_counts_what_delete_would_destroy(tmp_path):
+    """'정말 지울까요?' 는 아무 정보도 주지 않는다. 개수와 용량을 세어 보여준다."""
+    source = tmp_path / "a.txt"
+    source.write_text("0123456789", encoding="utf-8")
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        client.post("/api/v1/remote/mkdir", json={"path": root, "name": "tree"})
+        client.post("/api/v1/remote/mkdir", json={"path": f"{root}/tree", "name": "inner"})
+        client.post(f"/api/v1/remote/upload?path={root}/tree/inner&local_path={source}")
+
+        info = client.get(f"/api/v1/remote/describe?path={root}/tree").json()
+        assert info["is_dir"] is True and info["name"] == "tree"
+        assert info["folders"] == 1 and info["files"] == 1 and info["bytes"] == 10
+
+
+def test_writes_stay_inside_my_own_nas_folder():
+    app = create_app()
+    with TestClient(app) as client:
+        # 공용 데이터셋은 읽기만 한다. 남의 자리에 쓰는 건 이 도구가 할 일이 아니다.
+        blocked = client.post("/api/v1/remote/mkdir",
+                              json={"path": "/data/datasets", "name": "mine"})
+        assert blocked.status_code == 403
+        assert client.post("/api/v1/remote/delete",
+                           json={"path": "/etc/passwd"}).status_code == 403
+
+
+def test_tool_managed_folders_cannot_be_deleted():
+    """.seraph-gui 는 사용자가 만든 적이 없다. 지웠을 때 뭘 잃는지도 알 수 없다."""
+    app = create_app()
+    with TestClient(app) as client:
+        for path in ("/data/mockuser", "/data/mockuser/.seraph-gui"):
+            refused = client.post("/api/v1/remote/delete", json={"path": path})
+            assert refused.status_code == 403
+            assert refused.json()["error"]["code"] == "REMOTE_PATH_PROTECTED"
+
+
+def test_entry_names_cannot_escape_the_folder_being_shown():
+    """'/' 하나만 통과해도 사용자가 보고 있는 폴더 밖에 파일을 만들 수 있다."""
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        for name in ("a/b", "..", ".", "", "  ", "x\\y", "bad\nname"):
+            assert client.post("/api/v1/remote/mkdir",
+                               json={"path": root, "name": name}).status_code == 422
+        # 경로 자체도 절대경로만 받는다.
+        assert client.post("/api/v1/remote/delete",
+                           json={"path": "relative/path"}).status_code == 422
+
+
+def test_rename_does_not_silently_overwrite_an_existing_name():
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        client.post("/api/v1/remote/mkdir", json={"path": root, "name": "one"})
+        client.post("/api/v1/remote/mkdir", json={"path": root, "name": "two"})
+        clash = client.post("/api/v1/remote/rename",
+                            json={"path": f"{root}/one", "new_name": "two"})
+        assert clash.status_code == 409
+        # 둘 다 그대로 남아 있어야 한다.
+        names = [e["name"] for e in client.get(f"/api/v1/remote/ls?path={root}").json()["entries"]]
+        assert {"one", "two"} <= set(names)

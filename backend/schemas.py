@@ -200,6 +200,55 @@ class LocalJobId(StrictModel):
         return value
 
 
+def _safe_entry_name(value: str) -> str:
+    """파일·폴더 이름으로 써도 되는가.
+
+    '/' 하나만 통과시켜도 사용자가 보고 있는 폴더 밖에 파일을 만들 수 있다.
+    '..' 은 더 직접적이다. 앞뒤 공백은 눈에 안 보이는 이름을 만들어서 자른다.
+    """
+    name = value.strip()
+    if not name or name in (".", ".."):
+        raise ValueError("이름을 입력하세요.")
+    if len(name) > 255:
+        raise ValueError("이름이 너무 깁니다(255자까지).")
+    if "/" in name or "\\" in name:
+        raise ValueError("이름에 / 나 \\ 는 쓸 수 없습니다.")
+    if any(ord(ch) < 32 for ch in name):
+        raise ValueError("이름에 제어 문자는 쓸 수 없습니다.")
+    return name
+
+
+class RemotePathRequest(StrictModel):
+    """탐색기가 건드릴 서버 경로. 절대경로만 받는다."""
+
+    path: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("path")
+    @classmethod
+    def valid_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("서버 경로는 / 로 시작해야 합니다.")
+        return value
+
+
+class MakeFolderRequest(RemotePathRequest):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        return _safe_entry_name(value)
+
+
+class RenameRequest(RemotePathRequest):
+    new_name: str
+
+    @field_validator("new_name")
+    @classmethod
+    def valid_new_name(cls, value: str) -> str:
+        return _safe_entry_name(value)
+
+
 class EnvSpec(StrictModel):
     """웹에서 만들 개인 conda 환경.
 

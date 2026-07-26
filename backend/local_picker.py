@@ -43,6 +43,18 @@ def select_code_path(kind: str) -> str | None:
     return _ask(dialog, "파일 선택창을 열 수 없습니다. 코드 경로를 직접 입력해 주세요.")
 
 
+def select_any_file() -> str | None:
+    """탐색기에서 지금 보고 있는 폴더로 올릴 파일 하나를 고른다.
+
+    데이터셋과 달리 확장자를 제한하지 않는다. 압축 파일만 받는 규칙은 NAS IOPS 를
+    지키려고 **데이터셋**에 건 것이지, 스크립트 한 장에 걸 이유가 없다.
+    """
+    def dialog(filedialog):
+        return filedialog.askopenfilename(title="SERAPH 폴더에 올릴 파일 선택")
+
+    return _ask(dialog, "파일 선택창을 열 수 없습니다.")
+
+
 def select_dataset_archive() -> str | None:
     """NAS 로 올릴 데이터셋 압축 파일을 고른다.
 

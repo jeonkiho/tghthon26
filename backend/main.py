@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from anyio import to_thread
 from fastapi import FastAPI, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from seraph import config as config_module
@@ -20,7 +22,7 @@ from .dependencies import ConnectionManager
 from .env_service import EnvService
 from .errors import ApiError, install_error_handlers
 from .job_service import JobService
-from .local_picker import select_code_path, select_dataset_archive
+from .local_picker import select_any_file, select_code_path, select_dataset_archive
 from .occupancy_history import OccupancyHistory
 from .remote import PREVIEW_MAX_BYTES
 from .watcher import Watcher
@@ -28,8 +30,11 @@ from .schemas import (
     ConnectRequest,
     EnvSpec,
     JobSpec,
+    MakeFolderRequest,
     PreviewRequest,
     RecommendationRequest,
+    RemotePathRequest,
+    RenameRequest,
     SubmitRequest,
 )
 
@@ -260,6 +265,59 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     @app.delete("/api/v1/envs/{name}")
     async def delete_env(name: ENV_NAME) -> dict[str, Any]:
         return {"ok": True, **await to_thread.run_sync(lambda: envs.delete(name))}
+
+    # --- 탐색기 쓰기 --------------------------------------------------------
+    # 이 도구의 첫 파괴적 기능이다. NAS 에는 휴지통이 없어서 한 번 지우면 끝이라,
+    # 무엇이 사라지는지 먼저 세어 보여주고(describe) 지운다(delete).
+
+    @app.post("/api/v1/remote/mkdir")
+    async def remote_mkdir(body: MakeFolderRequest) -> dict[str, Any]:
+        remote = jobs.remote
+        return {"ok": True, **await to_thread.run_sync(
+            lambda: remote.make_folder(body.path, body.name))}
+
+    @app.post("/api/v1/remote/rename")
+    async def remote_rename(body: RenameRequest) -> dict[str, Any]:
+        remote = jobs.remote
+        return {"ok": True, **await to_thread.run_sync(
+            lambda: remote.rename_entry(body.path, body.new_name))}
+
+    @app.get("/api/v1/remote/describe")
+    async def remote_describe(path: str) -> dict[str, Any]:
+        # "정말 지울까요?" 는 아무 정보도 주지 않는다. 몇 개가 몇 GB 사라지는지 센다.
+        remote = jobs.remote
+        return {"ok": True, **await to_thread.run_sync(lambda: remote.describe_target(path))}
+
+    @app.post("/api/v1/remote/delete")
+    async def remote_delete(body: RemotePathRequest) -> dict[str, Any]:
+        remote = jobs.remote
+        return {"ok": True, **await to_thread.run_sync(lambda: remote.delete_entry(body.path))}
+
+    @app.post("/api/v1/remote/upload")
+    async def remote_upload(path: str, local_path: str | None = None) -> dict[str, Any]:
+        # local_path 를 안 주면 사용자 PC 의 파일 선택창을 연다(백엔드가 로컬에서 돈다).
+        chosen = local_path or await to_thread.run_sync(select_any_file)
+        if not chosen:
+            return {"ok": True, "selected": False, "file": None}
+        remote = jobs.remote
+        info = await to_thread.run_sync(lambda: remote.upload_into(chosen, path))
+        return {"ok": True, "selected": True, "file": info}
+
+    @app.get("/api/v1/remote/download")
+    async def remote_download(path: str) -> StreamingResponse:
+        """서버 파일을 내 PC 로 내려받는다. 폴더면 tar.gz 로 묶어서 흘려보낸다.
+
+        결과물을 보려고 scp 명령을 외우게 하지 않으려는 것이다. 브라우저의 다운로드
+        기능을 그대로 쓰므로 진행률·이어받기·저장 위치를 브라우저가 처리한다.
+        """
+        remote = jobs.remote
+        stream, meta = await to_thread.run_sync(lambda: remote.open_download(path))
+        # 한글 파일명은 latin-1 헤더에 그대로 못 넣는다. RFC 5987 로 함께 준다.
+        quoted = urllib.parse.quote(meta["filename"])
+        headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}
+        if meta.get("size") is not None:
+            headers["Content-Length"] = str(meta["size"])
+        return StreamingResponse(stream, media_type=meta["media_type"], headers=headers)
 
     @app.get("/api/v1/cluster/status")
     async def cluster_status(partition: str | None = None) -> dict[str, Any]:

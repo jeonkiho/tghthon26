@@ -75,6 +75,7 @@ function Icon({ name, size = 20 }) {
     logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></>,
     box: <><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></>,
     trash: <><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></>,
+    download: <><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -524,6 +525,8 @@ function fmtWhen(seconds) {
     { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+const posixName = (path) => path.split("/").filter(Boolean).pop() || path;
+
 function fileKind(entry) {
   if (entry.is_dir) return entry.is_link ? "폴더 링크" : "폴더";
   if (entry.is_archive) return "압축 파일";
@@ -557,6 +560,43 @@ function TreeNode({ node, depth, cwd, expanded, kidsByPath, onToggle, onOpen }) 
   </>;
 }
 
+// 지우기 전에 무엇이 사라지는지 보여준다. NAS 에는 휴지통이 없어서 한 번 지우면
+// 끝이다. "정말 지울까요?" 는 아무 정보도 주지 않으므로 개수와 용량을 세어 보여주고,
+// 폴더는 이름을 직접 입력해야 지워지게 한다 — 실수로 눌러서는 안 되는 버튼이다.
+function DeleteDialog({ target, busy, onCancel, onConfirm }) {
+  const [typed, setTyped] = useState("");
+  if (!target) return null;
+  const info = target.info;
+  const needsTyping = info?.is_dir;
+  const ready = !busy && (!needsTyping || typed === info.name);
+  return <div className="connect-overlay" onClick={onCancel}>
+    <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
+      <p className="eyebrow">DELETE</p>
+      <h2>{info ? `'${info.name}' 을 지웁니다` : "확인하는 중…"}</h2>
+      {info && <>
+        <dl className="detail-grid">
+          <div><dt>종류</dt><dd>{info.is_dir ? "폴더" : "파일"}</dd></div>
+          <div><dt>용량</dt><dd>{info.bytes == null ? "확인 불가" : fmtBytes(info.bytes)}</dd></div>
+          {info.is_dir && <div><dt>안에 든 폴더</dt><dd>{info.folders ?? "—"}개</dd></div>}
+          {info.is_dir && <div><dt>안에 든 파일</dt><dd>{info.files ?? "—"}개</dd></div>}
+          <div className="wide"><dt>경로</dt><dd>{info.path}</dd></div>
+        </dl>
+        <p className="confirm-warn"><Icon name="warn" size={15}/> 서버에는 휴지통이 없습니다. 되돌릴 수 없습니다.</p>
+        {needsTyping && <label className="field confirm-type">
+          <span>지우려면 폴더 이름 <b>{info.name}</b> 을 입력하세요</span>
+          <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus/>
+        </label>}
+      </>}
+      <div className="button-row">
+        <button className="secondary" onClick={onCancel} disabled={busy}>취소</button>
+        <button className="danger-button confirm-delete" onClick={onConfirm} disabled={!ready}>
+          {busy ? "지우는 중…" : "지웁니다"}
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
 function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
   const picker = mode === "picker";
   const [roots, setRoots] = useState([]);
@@ -570,6 +610,10 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
   const [sort, setSort] = useState({ key: "name", asc: true });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [copied, setCopied] = useState(null);
+  const [working, setWorking] = useState(false);
+  const [renaming, setRenaming] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const ls = useCallback(async (path, extra = "") => {
     const query = new URLSearchParams({ show_hidden: String(showHidden) });
@@ -614,6 +658,76 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
     } catch { setTreeKids((old) => ({ ...old, [path]: [] })); }
   }, [expanded, treeKids, ls]);
 
+  // 경로 복사. 웹에서 다 되더라도 터미널이나 스크립트에 붙여넣을 일은 남는다.
+  // 화면에 보이는 경로를 손으로 옮겨 적게 하면 거기서 오타가 난다.
+  const copyPath = useCallback(async (path) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(path);
+      window.setTimeout(() => setCopied((old) => (old === path ? null : old)), 1500);
+    } catch {
+      setErr("클립보드에 쓸 수 없습니다. 주소가 localhost 인지 확인해 주세요.");
+    }
+  }, []);
+
+  // 브라우저의 다운로드 기능을 그대로 쓴다. 진행률·저장 위치·이어받기를 우리가
+  // 다시 만들 이유가 없다. 폴더면 서버가 tar.gz 로 묶어서 흘려보낸다.
+  const download = useCallback((path) => {
+    const link = document.createElement("a");
+    link.href = `/api/v1/remote/download?path=${encodeURIComponent(path)}`;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, []);
+
+  // --- 쓰기 ---------------------------------------------------------------
+  const act = useCallback(async (run) => {
+    setWorking(true); setErr(null);
+    try { await run(); await open(cwd); }
+    catch (e) { setErr(e.message); }
+    finally { setWorking(false); }
+  }, [open, cwd]);
+
+  const createFolder = () => {
+    const name = window.prompt("새 폴더 이름", "새 폴더");
+    if (name) act(() => api("/api/v1/remote/mkdir",
+      { method: "POST", body: JSON.stringify({ path: cwd, name }) }));
+  };
+
+  const uploadHere = () => act(async () => {
+    const done = await api(`/api/v1/remote/upload?path=${encodeURIComponent(cwd)}`,
+      { method: "POST", timeoutMs: 10 * 60_000 });   // 선택창 + 전송. 넉넉히 기다린다.
+    if (!done.selected) throw Object.assign(new Error("올릴 파일을 고르지 않았습니다."),
+      { code: "UPLOAD_CANCELLED" });
+  }).catch(() => {});
+
+  const commitRename = () => {
+    const { path, value } = renaming;
+    setRenaming(null);
+    if (value && value !== posixName(path)) {
+      act(() => api("/api/v1/remote/rename",
+        { method: "POST", body: JSON.stringify({ path, new_name: value }) }));
+    }
+  };
+
+  const askDelete = async (entry) => {
+    setDeleteTarget({ entry, info: null });
+    try {
+      const info = await api(`/api/v1/remote/describe?path=${encodeURIComponent(entry.path)}`);
+      setDeleteTarget((old) => (old?.entry.path === entry.path ? { ...old, info } : old));
+    } catch (e) {
+      setDeleteTarget(null);
+      setErr(e.message);
+    }
+  };
+
+  const confirmDelete = () => {
+    const path = deleteTarget.entry.path;
+    act(() => api("/api/v1/remote/delete", { method: "POST", body: JSON.stringify({ path }) }))
+      .finally(() => { setDeleteTarget(null); setSelected(null); setPreview(null); });
+  };
+
   const look = useCallback(async (entry) => {
     setSelected(entry);
     setPreview(null);
@@ -653,10 +767,39 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
         <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)}/>
         숨김 항목
       </label>
+      <button className="icon-button" onClick={() => copyPath(cwd)} disabled={!cwd}
+        title="이 폴더 경로 복사">
+        <Icon name={copied === cwd ? "check" : "copy"} size={16}/>
+      </button>
+      {!picker && <button className="icon-button" onClick={() => download(cwd)} disabled={!cwd || busy}
+        title="이 폴더를 tar.gz 로 내려받기">
+        <Icon name="download" size={16}/>
+      </button>}
       <button className="icon-button" onClick={() => open(cwd)} disabled={busy} title="새로고침">
         <Icon name="refresh" size={16}/>
       </button>
     </div>
+
+    {!picker && <div className="exp-actions">
+      <button className="secondary compact" onClick={createFolder} disabled={working || !cwd}>
+        <Icon name="plus" size={15}/> 새 폴더
+      </button>
+      <button className="secondary compact" onClick={uploadHere} disabled={working || !cwd}>
+        <Icon name="arrow" size={15}/> 내 PC에서 올리기
+      </button>
+      <span className="exp-sep"/>
+      <button className="secondary compact" disabled={!selected || working}
+        onClick={() => setRenaming({ path: selected.path, value: selected.name })}>
+        이름 변경
+      </button>
+      <button className="secondary compact danger" disabled={!selected || working}
+        onClick={() => askDelete(selected)}>
+        <Icon name="trash" size={15}/> 삭제
+      </button>
+      <span className="exp-selected">
+        {selected ? `선택: ${selected.name}` : "한 번 눌러 선택, 두 번 눌러 열기"}
+      </span>
+    </div>}
 
     {err && <p className="nas-err">{err}</p>}
 
@@ -681,11 +824,21 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
             <Icon name="folder" size={20}/><span>이 폴더는 비어 있습니다.</span></div>}
           {!busy && entries.map((entry) => <button key={entry.path}
             className={`exp-row ${selected?.path === entry.path ? "on" : ""} ${entry.hidden ? "dim" : ""}`}
-            onClick={() => entry.is_dir ? open(entry.path) : look(entry)}
-            onDoubleClick={() => picker && pickable(entry) && onPick(entry.path)}>
+            onClick={() => look(entry)}
+            onDoubleClick={() => entry.is_dir ? open(entry.path)
+              : picker && pickable(entry) ? onPick(entry.path) : null}>
             <span className="exp-name">
               <Icon name={entry.is_dir ? "folder" : entry.is_archive ? "box" : "server"} size={15}/>
-              {entry.name}{entry.is_link ? " ↗" : ""}
+              {renaming?.path === entry.path
+                ? <input className="exp-rename" value={renaming.value} autoFocus
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename();
+                      if (e.key === "Escape") setRenaming(null);
+                    }}
+                    onBlur={commitRename}/>
+                : <>{entry.name}{entry.is_link ? " ↗" : ""}</>}
             </span>
             <span>{entry.is_dir ? "—" : fmtBytes(entry.size)}</span>
             <span>{fmtWhen(entry.mtime)}</span>
@@ -698,9 +851,18 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
     {selected && !selected.is_dir && <div className="exp-preview">
       <div className="exp-preview-head">
         <div><strong>{selected.name}</strong><small>{selected.path}</small></div>
-        {picker && <button className="primary compact" disabled={!pickable(selected)}
-          onClick={() => onPick(selected.path)}
-          title={pickable(selected) ? "" : "압축 파일만 데이터로 쓸 수 있습니다"}>이 파일 사용</button>}
+        <div className="exp-preview-actions">
+          <button className="secondary compact" onClick={() => copyPath(selected.path)}>
+            <Icon name={copied === selected.path ? "check" : "copy"} size={15}/>
+            {copied === selected.path ? "복사됨" : "경로 복사"}
+          </button>
+          {!picker && <button className="secondary compact" onClick={() => download(selected.path)}>
+            <Icon name="download" size={15}/> 내려받기
+          </button>}
+          {picker && <button className="primary compact" disabled={!pickable(selected)}
+            onClick={() => onPick(selected.path)}
+            title={pickable(selected) ? "" : "압축 파일만 데이터로 쓸 수 있습니다"}>이 파일 사용</button>}
+        </div>
       </div>
       {preview === null ? <p className="muted">여는 중…</p>
         : preview.error ? <p className="nas-err">{preview.error}</p>
@@ -710,6 +872,9 @@ function FileExplorer({ mode = "page", onPick, onUpload, uploading }) {
             {preview.truncated && <p className="muted">앞부분만 보여줍니다 — 전체 {fmtBytes(preview.size)}</p>}
           </>}
     </div>}
+
+    <DeleteDialog target={deleteTarget} busy={working}
+      onCancel={() => setDeleteTarget(null)} onConfirm={confirmDelete}/>
 
     {picker && <div className="nas-foot">
       <span>압축 파일(.tar · .tar.gz · .tgz · .zip)만 고를 수 있습니다 — NAS IOPS 보호</span>
