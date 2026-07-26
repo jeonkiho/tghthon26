@@ -105,6 +105,42 @@ def _probe(conn, snapshot, partition, gpus, hours, high_perf, node):
     }
 
 
+def _immediate_node(snapshot, partitions, gpus, high_perf, node_filter):
+    """지금 당장 GPU 를 받을 수 있는 노드. 규칙은 단순하다 — 내가 쓸 수 있는 노드의
+    여유 GPU 수가 요청 GPU 수 이상이면 백필로 즉시 배정된다.
+
+    왜 이렇게 하냐면 — `sbatch --test-only` 는 대기열을 '우선순위 순서'로만 계산하고
+    백필을 반영하지 않는다. 그래서 노드에 GPU 가 비어 있어도, 나보다 우선순위 높은
+    (하지만 다른 노드에 고정됐거나 더 많은 GPU 를 기다리는) 대기 작업 뒤로 밀어
+    '며칠 뒤'로 과대 예측한다. 실측으로 확인했다: ariel-v8 에 GPU 1개가 비어 있는데
+    --test-only 는 '2일 뒤'라 답했지만, 실제로는 1-GPU 작업이 즉시 배정된다.
+
+    usable_gpus 는 idle CPU 가 없으면 0 이 되므로(cpu_starved) CPU 부족도 반영된
+    값이다. 학부 노드 제한과 파티션 접근 규칙은 그대로 지킨다.
+
+    고성능을 못 쓰는(QOS 한도 0) 사용자가 고성능을 요청하면 여유가 있어도 즉시
+    후보에서 빼서, 기존 경로가 이유와 함께 막게 한다.
+    """
+    limit = snapshot.my_qos
+    if high_perf and limit and limit.max_high_perf_gpus == 0:
+        return None
+    allowed = services._node_allowlist(snapshot)
+    best = None
+    for partition in partitions:
+        for n in snapshot.nodes:
+            if partition not in n.partitions or not n.schedulable:
+                continue
+            if n.is_high_perf != high_perf or n.usable_gpus < gpus:
+                continue
+            if allowed is not None and n.name not in allowed:
+                continue
+            if node_filter and n.name != node_filter:
+                continue
+            if best is None or n.usable_gpus > best[1].usable_gpus:
+                best = (partition, n)
+    return best
+
+
 def _node_candidates(snapshot, partition, gpus, high_perf, limit):
     """이 파티션에서 물어볼 노드 후보. 여유 많은 순.
 
@@ -148,6 +184,35 @@ def find_fastest(conn, snapshot, *, gpus=1, hours=2.0, high_perf=False,
     if probe_nodes is None:
         probe_nodes = snapshot.config.probe_nodes
     partitions = candidate_partitions(snapshot, hours)
+
+    # 지금 여유 GPU 로 바로 되는 노드가 있으면 그걸로 끝. Slurm 대기열 추정보다
+    # 이게 우선이다(위 _immediate_node 주석 참고). --test-only 는 여유 GPU 를
+    # 무시하고 과대 예측하기 때문이다.
+    immediate = _immediate_node(snapshot, partitions, gpus, high_perf, node)
+    if immediate:
+        part, n = immediate
+        # 추천한 곳에 바로 낼 수 있는 sbatch 스크립트도 함께 만들어 둔다.
+        hh = int(hours)
+        mm = int(round((hours - hh) * 60))
+        built = sbatch_module.generate_sbatch(
+            snapshot, name=_PROBE_NAME, command='hostname', partition=part,
+            gpus=gpus, high_perf=high_perf, node=n.name,
+            time_limit=f'{hh}:{mm:02d}:00')
+        best = {
+            'partition': part, 'node': n.name, 'ok': True, 'source': 'free_gpus',
+            'high_perf': high_perf, 'wait_seconds': 0, 'wait_text': _fmt_wait(0),
+            'starts_now': True, 'usable_gpus': n.usable_gpus,
+            'time_limit_seconds': snapshot.partitions[part].time_limit_seconds,
+            'script': built.get('script'),
+        }
+        return {
+            'can_start_now': True,
+            'best': _public(best),
+            'options': [_public(best)],
+            'blocked': [],
+            'requested': {'gpus': gpus, 'hours': hours, 'high_perf': high_perf},
+            'headline': _headline(True, best, [best], [], gpus),
+        }
 
     # 고성능 노드(m/k/n)는 **따로 신청해서 받은 사람만** 쓰는 자원이다.
     # (QOS 90개 중 40개가 high_perf=0 으로 아예 금지, 기본 grad/ugrad 도 0)

@@ -156,7 +156,10 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     @app.get("/api/v1/me")
     async def me() -> dict[str, Any]:
         snapshot, cache_meta = await cached_snapshot()
-        return {"ok": True, **services.whoami(snapshot), "cache": cache_meta}
+        # 접속한 클러스터의 내 NAS 경로. 화면이 결과 경로 기본값을 만들 때 쓴다
+        # (클러스터마다 다르다: ariel /nas2/data, moana /data).
+        return {"ok": True, **services.whoami(snapshot),
+                "data_root": jobs.remote.data_root, "cache": cache_meta}
 
     @app.get("/api/v1/tutorial")
     async def get_tutorial_route() -> dict[str, Any]:

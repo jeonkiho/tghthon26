@@ -54,7 +54,10 @@ DEFAULTS = {
         'warn_paths': ['/home/'],
     },
     'storage': {
-        'data_root': '/data',
+        'data_root': '/data',           # 기본(예: moana 는 /data)
+        # 클러스터마다 NAS 마운트 경로가 다르다. 접속 호스트로 결정한다.
+        # (ariel 은 /nas2/data, moana 는 /data)
+        'data_root_by_host': {},
         'local_datasets_root': '/local_datasets',
     },
     'sbatch': {
@@ -148,6 +151,16 @@ class Config:
     @property
     def data_root(self):
         return self._data['storage']['data_root'].rstrip('/')
+
+    def data_root_for(self, host):
+        """접속한 클러스터(호스트)의 NAS 경로. 매핑에 없으면 기본값.
+
+        클러스터마다 마운트가 다르다(ariel /nas2/data, moana /data). 호스트로
+        고른다. host 가 없으면(mock 등) 기본값을 쓴다.
+        """
+        mapping = self._data['storage'].get('data_root_by_host') or {}
+        base = mapping.get(host) or self._data['storage']['data_root']
+        return base.rstrip('/')
 
     @property
     def local_datasets_root(self):

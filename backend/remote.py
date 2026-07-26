@@ -149,7 +149,9 @@ class MockRemote:
         self._root = pathlib.Path(self._tmp.name)
         self._home = "/home/mockuser"
         self.username = "mockuser"
-        self.data_root = f"{connection.config.data_root}/{self.username}"
+        self.data_root_base = connection.config.data_root_for(
+            getattr(connection, "host", None))
+        self.data_root = f"{self.data_root_base}/{self.username}"
         self._jobs: dict[str, dict[str, Any]] = {}
         self._builds: dict[str, dict[str, Any]] = {}
         self._next_job_id = 990001
@@ -544,9 +546,13 @@ class MockRemote:
         script = self._local(f"{remote_dir}/preflight.sh")
         if not script.is_file():
             raise ApiError("JOB_NOT_PREPARED", "srun 사전 점검 스크립트를 찾을 수 없습니다.", 409)
+        if gpus and gpus > 0:
+            res = f"gpu={gpus} cpu-per-gpu={cpus} mem-per-gpu={memory}"
+        else:
+            res = f"cpu-only cpus-per-task={cpus} mem={memory}"
         return (
             f"[mock] srun preflight on {node or 'automatic-node'}\n"
-            f"[mock] partition={partition} gpu={gpus} cpu-per-gpu={cpus} mem-per-gpu={memory}\n"
+            f"[mock] partition={partition} {res}\n"
             "SERAPH srun preflight OK\n"
         )
 
@@ -614,7 +620,10 @@ class SSHRemote:
         self._sftp_lock = threading.RLock()
         self._home = posixpath.normpath(self.sftp.normalize("."))
         self.username = connection.username
-        self.data_root = f"{connection.config.data_root}/{self.username}"
+        # 클러스터마다 NAS 경로가 다르다(ariel /nas2/data, moana /data). 접속 호스트로 정한다.
+        self.data_root_base = connection.config.data_root_for(
+            getattr(connection, "host", None))
+        self.data_root = f"{self.data_root_base}/{self.username}"
 
     @property
     def home(self) -> str:
@@ -984,7 +993,7 @@ class SSHRemote:
         candidates = [
             f"{self.data_root}/anaconda3",
             f"{self.data_root}/miniconda3",
-            f"{self.connection.config.data_root}/opt/anaconda3",
+            f"{self.data_root_base}/opt/anaconda3",
             f"{self._home}/anaconda3",
             f"{self._home}/miniconda3",
         ]
@@ -1269,13 +1278,21 @@ class SSHRemote:
         node: str | None,
     ) -> str:
         clean = self._guard_job_path(remote_dir)
-        gres = f"gpu:high_perf:{gpus}" if high_perf else f"gpu:{gpus}"
-        args = [
-            "srun",
-            "--ntasks=1",
-            f"--gres={gres}",
-            f"--cpus-per-gpu={cpus}",
-            f"--mem-per-gpu={memory}",
+        args = ["srun", "--ntasks=1"]
+        if gpus and gpus > 0:
+            gres = f"gpu:high_perf:{gpus}" if high_perf else f"gpu:{gpus}"
+            args += [
+                f"--gres={gres}",
+                f"--cpus-per-gpu={cpus}",
+                f"--mem-per-gpu={memory}",
+            ]
+        else:
+            # CPU 전용: GRES 없이 태스크 단위로 요청 (sbatch 스크립트와 동일 규칙).
+            args += [
+                f"--cpus-per-task={cpus}",
+                f"--mem={memory}",
+            ]
+        args += [
             f"--partition={partition}",
             "--time=00:05:00",
             "--kill-on-bad-exit=1",

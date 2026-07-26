@@ -388,9 +388,10 @@ def test_snapshot_cache_deduplicates_concurrent_refreshes():
 def test_request_validation_uses_common_error_shape():
     app = create_app()
     with TestClient(app) as client:
+        # gpus=0 은 이제 CPU 전용으로 유효하다. 무효값(한도 초과)으로 에러 모양을 검사한다.
         response = client.post(
             "/api/v1/recommendations",
-            json={"gpus": 0, "hours": 2, "high_perf": False},
+            json={"gpus": 99, "hours": 2, "high_perf": False},
         )
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_REQUEST"

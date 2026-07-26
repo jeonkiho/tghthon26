@@ -136,17 +136,20 @@ def test_options_sorted_by_wait(conn, snap):
     assert waits == sorted(waits)
 
 
-def test_long_job_cannot_start_now(conn, snap):
-    """12시간 학습은 debug 를 못 쓰니 batch 에서 기다려야 한다."""
+def test_long_job_uses_batch_not_debug(conn, snap):
+    """12시간 학습은 debug(4시간 제한)를 못 쓰니 batch 에서 돈다.
+
+    여유 GPU 가 있으면 바로 시작한다(단순 규칙: 여유 GPU >= 요청). debug 는
+    추천에서 제외되므로 batch_grad 가 선택돼야 한다.
+    """
     r = placement.find_fastest(conn, snap, gpus=1, hours=12)
-    assert r['can_start_now'] is False
     assert r['best']['partition'] == 'batch_grad'
-    assert '가장 빨리' in r['headline']
-    assert r['best']['wait_seconds'] > 0
 
 
 def test_headline_gives_wait_time(conn, snap):
-    """지금 안 되면 언제 되는지 알려준다 (올려두면 되니까)."""
+    """지금 여유 GPU 가 없으면 언제 되는지 알려준다 (올려두면 되니까)."""
+    for n in snap.nodes:          # 모든 노드를 꽉 채워 즉시 시작 경로를 막는다
+        n.used_gpus = n.total_gpus
     r = placement.find_fastest(conn, snap, gpus=1, hours=2)
     assert '가장 빨리' in r['headline']
     assert r['best']['wait_text'] in r['headline']

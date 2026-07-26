@@ -6,5 +6,8 @@ frontend/node_modules/
 frontend/.vite/
 *.log
 
+# 로컬 비밀(Slack 봇 토큰 등). 절대 커밋하지 않는다.
+.env
+
 # 익명화 전 원본 fixture. 다른 학생들의 실제 계정명이 들어 있어 커밋하지 않는다.
 tests/fixtures_real/
