@@ -197,8 +197,51 @@ class Config:
         return copy.deepcopy(self._data)
 
 
+ENV_PATH = ROOT / '.env'
+
+
+def load_env_file(path=None):
+    """.env 를 읽어 환경변수로 올린다. 이미 있는 변수는 덮지 않는다.
+
+    시작 스크립트(start_unix.sh)에서만 불러오면, 그 스크립트를 거치지 않는 실행은
+    전부 토큰을 못 본다 — 윈도우 배치 파일, uvicorn 직접 실행, 에디터의 실행 버튼.
+    실제로 그래서 토큰을 넣어두고도 공지가 계속 mock 으로 나왔다. 파이썬에서
+    읽으면 어떻게 띄우든 똑같이 동작한다.
+
+    새 의존성(python-dotenv)을 쓰지 않는다. 우리가 필요한 문법은 KEY=VALUE 뿐이다.
+    """
+    path = pathlib.Path(path or ENV_PATH)
+    if not path.exists():
+        return {}
+    loaded = {}
+    for raw in path.read_text(encoding='utf-8').splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('export '):
+            line = line[len('export '):].lstrip()
+        key, sep, value = line.partition('=')
+        key = key.strip()
+        if not sep or not key:
+            continue
+        value = value.strip()
+        # 셸에서는 따옴표가 벗겨진다. 파이썬으로 읽을 때 그대로 두면 토큰 값에
+        # 따옴표가 섞여 들어가 'invalid_auth' 로 죽는다 — 원인을 찾기 어렵다.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        if key not in os.environ:
+            os.environ[key] = value
+        loaded[key] = value
+    return loaded
+
+
 def load(path=DEFAULT_PATH):
-    """config.yaml 을 읽는다. 없거나 PyYAML 이 없으면 기본값으로 동작한다."""
+    """config.yaml 을 읽는다. 없거나 PyYAML 이 없으면 기본값으로 동작한다.
+
+    여기서 .env 를 읽지 않는다. 설정을 읽는 것만으로 파일에서 비밀이 딸려 오면,
+    설정을 쓰는 모든 코드가 개발자의 진짜 토큰을 갖게 된다 — 테스트도 포함이다.
+    .env 로딩은 앱이 뜰 때 한 번만 명시적으로 한다(backend.main.create_app).
+    """
     path = pathlib.Path(path)
     if not path.exists():
         return Config(copy.deepcopy(DEFAULTS))

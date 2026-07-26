@@ -111,7 +111,10 @@ def test_tutorial_api():
         assert "sample_status" in body
 
 
-def test_announcements_api():
+def test_announcements_api(monkeypatch):
+    # 토큰을 지우고 돈다. 개발자 PC 의 .env 에 진짜 토큰이 있으면 이 시험이 실제
+    # Slack 워크스페이스를 때리게 되고, 네트워크와 남의 서버에 결과가 매달린다.
+    monkeypatch.delenv("SERAPH_SLACK_TOKEN", raising=False)
     app = create_app()
     with TestClient(app) as client:
         body = client.get("/api/v1/announcements").json()
@@ -1045,3 +1048,17 @@ def test_rename_does_not_silently_overwrite_an_existing_name():
         # 둘 다 그대로 남아 있어야 한다.
         names = [e["name"] for e in client.get(f"/api/v1/remote/ls?path={root}").json()["entries"]]
         assert {"one", "two"} <= set(names)
+
+
+def test_announcements_say_when_they_are_only_examples(monkeypatch):
+    """토큰이 없으면 예시 공지가 나간다. 그게 예시라는 걸 화면이 알아야 한다.
+
+    예전에는 ok=true 로 그럴듯한 공지 5건이 나갔고, 진짜인지 예시인지 구별할
+    방법이 없었다. 토큰을 넣어두고도 예시가 계속 보이면 어디를 봐야 할지 모른다.
+    """
+    monkeypatch.delenv("SERAPH_SLACK_TOKEN", raising=False)
+    app = create_app()
+    with TestClient(app) as client:
+        body = client.get("/api/v1/announcements").json()
+        assert body["source"] == "mock"
+        assert body["announcements"], "예시 공지는 그대로 보여줘야 화면이 비지 않는다"

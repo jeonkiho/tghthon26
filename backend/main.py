@@ -172,7 +172,12 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
         # Slack 공지는 세라프 SSH 와 무관하다(토큰 없으면 mock). 실패해도 예외를 던지지 않는다.
         def _fetch() -> dict[str, Any]:
             client = slack.connect(cfg)
-            return slack.get_announcements(client, cfg.slack_channel, cfg.slack_limit)
+            body = slack.get_announcements(client, cfg.slack_channel, cfg.slack_limit)
+            # 토큰이 없으면 예시 공지가 나가는데, 예전에는 그게 진짜인지 예시인지
+            # 화면에서 알 방법이 없었다. 토큰을 넣어두고도 예시가 계속 보이면
+            # 어디를 봐야 하는지 알 수 없다 — 그래서 출처를 같이 준다.
+            live = not isinstance(client, slack.MockSlackClient)
+            return {**body, "source": "slack" if live else "mock"}
         return await to_thread.run_sync(_fetch)
 
     @app.post("/api/v1/local/select-code")
@@ -507,4 +512,14 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     return app
 
 
+# 실제로 서버를 띄울 때만 비밀을 읽는다.
+#
+# 시작 스크립트에 맡기면 그 스크립트를 거치지 않는 실행(윈도우 배치, uvicorn 직접,
+# 에디터의 실행 버튼)은 전부 토큰을 못 본다 — 토큰을 .env 에 넣어두고도 공지가
+# 계속 예시로 나오던 이유가 이것이었다.
+#
+# 반대로 create_app() 안에서 읽으면 테스트마다 개발자의 진짜 토큰이 실려서,
+# 공지 테스트가 실제 Slack 워크스페이스를 때리게 된다. 그래서 여기, 프로세스가
+# 서버로 뜨는 지점에서만 읽는다.
+config_module.load_env_file()
 app = create_app()
