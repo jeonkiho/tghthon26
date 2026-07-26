@@ -4,6 +4,11 @@ __pycache__/
 .pytest_cache/
 frontend/node_modules/
 frontend/.vite/
+
+# 프론트엔드 빌드 산출물. 소스에서 다시 만들 수 있고, 커밋해 두면 프론트를 건드리는
+# PR 두 개가 동시에 열릴 때마다 index.html 이 충돌한다. 실제로 그 충돌을 웹 에디터에서
+# 해결하다 CSS 가 통째로 빠진 채 머지된 적이 있다. 시작할 때 만든다(frontend_build.py).
+frontend/dist/
 *.log
 
 # 로컬 비밀(Slack 봇 토큰 등). 절대 커밋하지 않는다.

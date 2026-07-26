@@ -90,14 +90,20 @@ SSH 모드에서는 시작할 때 비밀번호 없는 자동 로그인을 시도
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -r requirements-api.txt
-cd frontend
-npm install
-npm run build
-cd ..
 .venv/bin/python run_gui.py
 ```
 
-Windows에서는 `.venv/bin/python` 대신 `.venv\Scripts\python.exe`를 사용합니다. React 빌드 결과인 `frontend/dist/`는 배포 ZIP에 포함되므로 일반 사용자는 Node.js가 없어도 됩니다.
+Windows에서는 `.venv/bin/python` 대신 `.venv\Scripts\python.exe`를 사용합니다.
+
+`run_gui.py`가 시작할 때 화면(`frontend/dist/`)을 필요하면 직접 빌드하므로 `npm`을 따로 칠 필요가 없습니다. 소스가 그대로면 건너뛰어서 두 번째 실행부터는 바로 뜹니다. 처음 한 번은 `npm install` 때문에 1~2분 걸리고, **그때만 Node.js가 필요합니다.**
+
+화면을 고치면서 개발할 때는 vite 개발 서버를 따로 띄우는 쪽이 빠릅니다(HMR):
+
+```bash
+npm --prefix frontend run dev     # http://127.0.0.1:5173, /api 는 8765 로 프록시
+```
+
+> `frontend/dist/`는 저장소에 두지 않습니다(`.gitignore`). 커밋해 두면 프론트를 건드리는 PR 두 개가 동시에 열릴 때마다 `index.html`이 충돌하고, 그 충돌을 웹 에디터에서 해결하면 소스는 합쳐졌는데 번들은 한쪽만 남습니다 — 실제로 그렇게 CSS가 통째로 빠진 채 머지된 적이 있습니다.
 
 ## 테스트
 
@@ -118,7 +124,7 @@ backend/
   schemas.py         Pydantic 입력 검증
 frontend/
   src/               React GUI
-  dist/              FastAPI가 제공하는 정적 빌드
+  dist/              FastAPI가 제공하는 정적 빌드 (커밋하지 않음 — 시작할 때 생성)
 seraph/               기존 파서·QOS·추천·sbatch 코어
 tests/                기존 테스트와 API 통합 테스트
 ```
