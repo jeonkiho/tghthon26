@@ -1159,3 +1159,23 @@ def test_known_conda_failures_get_an_explanation():
     assert tos and "약관" in tos
     assert _explain_failure("PackagesNotFoundError: torch=99")
     assert _explain_failure("그냥 알 수 없는 오류") is None
+
+
+def test_tos_accept_only_where_we_do_not_choose_the_channels():
+    """남의 이용약관에 대신 동의하는 일은 필요한 곳에서만 한다.
+
+    scratch 는 --override-channels 로 화면에 적힌 채널만 쓰므로 기본 채널에 갈 일이
+    없다. 쓰지도 않을 약관에 동의부터 해 둘 이유가 없다. 반대로 clone·spec 은
+    채널을 우리가 정하지 않으므로 남긴다.
+    """
+    from backend.env_service import EnvService
+    from backend.schemas import EnvSpec
+
+    scratch = EnvService._steps(EnvSpec(name="a", mode="scratch"), "/p", None)
+    assert "tos accept" not in scratch
+    assert "--override-channels" in scratch
+
+    clone = EnvService._steps(EnvSpec(name="b", mode="clone", source="x"), "/p", "/src")
+    assert "tos accept" in clone
+    # 로그를 감추지 않는다 — 대신 동의한 사실이 남아야 한다.
+    assert ">/dev/null" not in clone

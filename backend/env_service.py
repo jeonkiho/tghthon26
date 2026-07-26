@@ -159,10 +159,11 @@ def detect_spec_files(local_dir: str) -> dict[str, Any]:
 _FAILURE_HINTS = (
     (
         "CondaToSNonInteractiveError",
-        "Anaconda 기본 채널(repo.anaconda.com)의 약관에 동의하지 않아 막혔습니다. "
-        "이 화면은 적어 놓은 채널만 쓰도록 바뀌었으니, 백엔드를 최신으로 올린 뒤 "
-        "다시 시도해 보세요. 그래도 나면 환경 파일이나 개인 .condarc 가 defaults "
-        "채널을 요구하는 경우입니다.",
+        "Anaconda 기본 채널(repo.anaconda.com)의 이용약관에 동의하지 않아 막혔습니다. "
+        "'처음부터 만들기'는 적어 놓은 채널만 쓰므로 이 오류가 나지 않습니다. "
+        "복제나 환경 파일로 만드는 중이라면, 그 환경·파일이 기본 채널을 요구하는 "
+        "경우입니다 — 환경 파일의 channels 에서 defaults 를 빼거나, 서버에서 "
+        "`conda tos accept` 로 직접 동의해야 합니다.",
     ),
     (
         "PackagesNotFoundError",
@@ -391,17 +392,26 @@ class EnvService:
         quoted_prefix = shlex.quote(prefix)
         lines: list[str] = []
 
-        if spec.mode in ("scratch", "clone"):
-            # conda 26+ 는 기본 채널(main/r) 이용약관 동의를 요구한다. -y 비대화형
-            # 실행이라 미동의면 CondaToSNonInteractiveError 로 바로 실패한다. 빌드 전에
-            # best-effort 로 동의해 둔다(구버전 conda 는 tos 서브커맨드가 없어 실패할 수
-            # 있으므로 || true 로 무시한다 — run 이 아니라 실패해도 빌드는 계속한다).
-            lines.append("say 'conda 채널 약관을 확인합니다.'")
+        # conda 26+ 는 기본 채널(repo.anaconda.com)의 이용약관 동의를 요구하고,
+        # -y 비대화형이라 미동의면 CondaToSNonInteractiveError 로 바로 실패한다.
+        #
+        # **scratch 에는 붙이지 않는다.** 아래에서 --override-channels 로 화면에 적힌
+        # 채널만 쓰므로 애초에 그 채널에 갈 일이 없다 — 쓰지도 않을 약관에 동의부터
+        # 해 둘 이유가 없다. 우리가 정할 수 없는 경우에만 남긴다:
+        #   clone — 원본 환경이 어느 채널에서 왔는지는 그 환경이 안다
+        #   spec  — 채널은 사용자가 커밋한 environment.yml 이 정한다
+        #
+        # 로그를 감추지 않는다. 남의 이용약관에 대신 동의하는 일이므로, 최소한
+        # 무슨 일이 있었는지는 빌드 로그에 남아야 한다.
+        if spec.mode in ("clone", "spec"):
+            lines.append("say 'conda 기본 채널 약관 동의를 확인합니다(이 방식은 채널을 우리가 정하지 않습니다).'")
             for _tos_channel in ("https://repo.anaconda.com/pkgs/main",
                                  "https://repo.anaconda.com/pkgs/r"):
+                # 구버전 conda 에는 tos 서브커맨드가 없다. 없다고 빌드를 멈추면 안 되므로
+                # run 이 아니라 || true 로 넘긴다.
                 lines.append(
                     f'"$CONDA_BIN" tos accept --override-channels '
-                    f"--channel {_tos_channel} >/dev/null 2>&1 || true")
+                    f"--channel {_tos_channel} 2>&1 | tail -1 || true")
 
         if spec.mode == "scratch":
             # --override-channels 를 붙인다. 이게 없으면 conda 는 화면에 적힌 채널
