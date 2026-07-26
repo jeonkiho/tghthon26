@@ -273,6 +273,74 @@ class MockRemote:
             "home": self._home,
         }
 
+    # --- 탐색기 쓰기 (mock) -----------------------------------------------
+
+    def _guard_removable(self, path: str) -> str:
+        clean = posixpath.normpath(path)
+        if not self._inside_sandbox(clean):
+            raise ApiError("REMOTE_PATH_NOT_ALLOWED", "내 폴더 아래에서만 지울 수 있습니다.", 403)
+        protected = {
+            posixpath.normpath(self.data_root): "내 폴더 자체는 지울 수 없습니다.",
+            posixpath.normpath(f"{self.data_root}/.seraph-gui"):
+                "작업 기록 폴더(.seraph-gui)는 지울 수 없습니다.",
+        }
+        if clean in protected:
+            raise ApiError("REMOTE_PATH_PROTECTED", protected[clean], status_code=403)
+        return clean
+
+    def describe_target(self, path: str) -> dict[str, Any]:
+        clean = self._guard_removable(path)
+        target = self._local(clean)
+        if target.is_dir():
+            folders = files = total = 0
+            for child in target.rglob("*"):
+                if child.is_dir():
+                    folders += 1
+                else:
+                    files += 1
+                    total += child.stat().st_size
+            return {"path": clean, "name": posixpath.basename(clean), "is_dir": True,
+                    "folders": folders, "files": files, "bytes": total}
+        size = target.stat().st_size if target.is_file() else None
+        return {"path": clean, "name": posixpath.basename(clean), "is_dir": False,
+                "folders": 0, "files": 1, "bytes": size}
+
+    def make_folder(self, parent: str, name: str) -> dict[str, Any]:
+        target = posixpath.join(posixpath.normpath(parent), name)
+        local = self._local(target)
+        if local.exists():
+            raise ApiError("REMOTE_MKDIR_FAILED", f"'{name}' 이 이미 있습니다.", 409)
+        local.mkdir(parents=True)
+        return {"path": target, "name": name}
+
+    def rename_entry(self, path: str, new_name: str) -> dict[str, Any]:
+        clean = self._guard_removable(path)
+        target = posixpath.join(posixpath.dirname(clean), new_name)
+        local_target = self._local(target)
+        if local_target.exists():
+            raise ApiError("REMOTE_RENAME_FAILED", f"'{new_name}' 이 이미 있습니다.", 409)
+        self._local(clean).rename(local_target)
+        return {"path": target, "name": new_name}
+
+    def delete_entry(self, path: str) -> dict[str, Any]:
+        clean = self._guard_removable(path)
+        target = self._local(clean)
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        else:
+            target.unlink(missing_ok=True)
+        return {"deleted": clean}
+
+    def upload_into(self, local_path: str, remote_dir: str) -> dict[str, Any]:
+        source = pathlib.Path(local_path).expanduser()
+        if not source.is_file():
+            raise ApiError("LOCAL_FILE_NOT_FOUND", "선택한 파일을 찾을 수 없습니다.", 400)
+        target = posixpath.join(posixpath.normpath(remote_dir), source.name)
+        local = self._local(target)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, local)
+        return {"path": target, "name": source.name, "size": source.stat().st_size}
+
     def open_download(self, path: str) -> tuple[Any, dict[str, Any]]:
         clean = posixpath.normpath(path)
         if not self._inside_sandbox(clean):
@@ -584,6 +652,38 @@ class SSHRemote:
                 return clean
         raise ApiError("REMOTE_PATH_NOT_ALLOWED", message, status_code=403)
 
+    def _guard_user_path(self, path: str) -> str:
+        """탐색기가 쓰는 경계 — 내 NAS 폴더 전체.
+
+        작업·환경용 _guard_job_path 보다 넓다. 그쪽을 넓히지 않고 따로 둔 이유는,
+        작업 코드에 경로 버그가 나더라도 여전히 좁은 네 루트를 벗어나지 못하게
+        하려는 것이다. 탐색기는 사용자가 눈으로 보고 누르는 곳이라 다르다.
+
+        더 넓히지는 않는다. /data/datasets 같은 공용 자리는 남의 것이고, 읽기는
+        되지만 쓰기는 이 도구가 할 일이 아니다.
+        """
+        return self._guard_write(
+            path,
+            [self.data_root],
+            f"{self.data_root} 아래에서만 파일을 만들거나 지울 수 있습니다.",
+        )
+
+    def _guard_removable(self, path: str) -> str:
+        """지우거나 이름을 바꿔도 되는 곳인가.
+
+        .seraph-gui 는 이 도구가 만들고 관리하는 폴더다. 사용자가 만든 적이 없으니
+        지웠을 때 무엇을 잃는지도 알 수 없다 — 작업 기록 전체가 사라진다.
+        """
+        clean = self._guard_user_path(path)
+        protected = {
+            posixpath.normpath(self.data_root): "내 폴더 자체는 지울 수 없습니다.",
+            posixpath.normpath(f"{self.data_root}/.seraph-gui"):
+                "작업 기록 폴더(.seraph-gui)는 지울 수 없습니다. 작업 기록은 '내 작업'에서 하나씩 지우세요.",
+        }
+        if clean in protected:
+            raise ApiError("REMOTE_PATH_PROTECTED", protected[clean], status_code=403)
+        return clean
+
     def _guard_job_path(self, path: str) -> str:
         # 쓰기는 여전히 사용자 소유 폴더로만 제한한다. 데이터셋 업로드와 환경 빌드
         # 때문에 허용 루트가 늘었을 뿐, 넷 다 /data/<사용자> 아래고 /data 전체가
@@ -649,6 +749,112 @@ class SSHRemote:
             "datasets_root": self.datasets_root,
             "home": self._home,
         }
+
+    # --- 탐색기 쓰기 ------------------------------------------------------
+    # 이 도구의 첫 파괴적 기능이다. NAS 에는 휴지통이 없어서 한 번 지우면 끝이라,
+    # 무엇이 사라지는지 먼저 세어서 보여주고 나서 지운다.
+
+    def describe_target(self, path: str) -> dict[str, Any]:
+        """지우기 전에 무엇이 사라지는지 센다.
+
+        "정말 지울까요?" 는 아무 정보도 주지 않는다. 폴더 3개·파일 12개·1.4GB 라고
+        말해줘야 사용자가 판단할 수 있다. 이 프로젝트의 원칙 그대로 — 추측하지 않는다.
+        """
+        clean = self._guard_removable(path)
+        quoted = shlex.quote(clean)
+        command = (
+            f"p={quoted}; "
+            'if [ -d "$p" ]; then '
+            '  printf "dir=1\\n"; '
+            '  printf "folders=%s\\n" "$(find "$p" -mindepth 1 -type d 2>/dev/null | wc -l)"; '
+            '  printf "files=%s\\n" "$(find "$p" -mindepth 1 ! -type d 2>/dev/null | wc -l)"; '
+            '  printf "bytes=%s\\n" "$(du -sb "$p" 2>/dev/null | cut -f1)"; '
+            'else '
+            '  printf "dir=0\\nfolders=0\\nfiles=1\\n"; '
+            '  printf "bytes=%s\\n" "$(stat -c %s "$p" 2>/dev/null)"; '
+            "fi"
+        )
+        raw = self.connection.run_command(
+            command, label="삭제 대상 확인", timeout=60, check=False)
+        parsed: dict[str, str] = {}
+        for line in raw.splitlines():
+            key, _, value = line.partition("=")
+            parsed[key.strip()] = value.strip()
+        as_int = lambda key: int(parsed[key]) if parsed.get(key, "").isdigit() else None  # noqa: E731
+        return {
+            "path": clean,
+            "name": posixpath.basename(clean),
+            "is_dir": parsed.get("dir") == "1",
+            "folders": as_int("folders"),
+            "files": as_int("files"),
+            # du 가 없거나 느려서 실패할 수 있다. 모르면 모른다고 한다.
+            "bytes": as_int("bytes"),
+        }
+
+    def make_folder(self, parent: str, name: str) -> dict[str, Any]:
+        target = self._guard_user_path(posixpath.join(posixpath.normpath(parent), name))
+        with self._sftp_lock:
+            try:
+                self.sftp.mkdir(target, mode=0o755)
+            except OSError as exc:
+                raise ApiError(
+                    "REMOTE_MKDIR_FAILED",
+                    f"'{name}' 폴더를 만들지 못했습니다. 같은 이름이 이미 있거나 권한이 없습니다.",
+                    status_code=409,
+                ) from exc
+        return {"path": target, "name": name}
+
+    def rename_entry(self, path: str, new_name: str) -> dict[str, Any]:
+        clean = self._guard_removable(path)
+        target = self._guard_user_path(posixpath.join(posixpath.dirname(clean), new_name))
+        with self._sftp_lock:
+            try:
+                # posix_rename 을 쓰지 않는다. 그건 있는 파일을 조용히 덮어쓴다 —
+                # 이름 바꾸기에서 남의 파일이 사라지면 안 된다.
+                self.sftp.rename(clean, target)
+            except OSError as exc:
+                raise ApiError(
+                    "REMOTE_RENAME_FAILED",
+                    f"'{new_name}' 로 바꾸지 못했습니다. 같은 이름이 이미 있거나 권한이 없습니다.",
+                    status_code=409,
+                ) from exc
+        return {"path": target, "name": new_name}
+
+    def delete_entry(self, path: str) -> dict[str, Any]:
+        clean = self._guard_removable(path)
+        self.connection.run_command(
+            f"rm -rf -- {shlex.quote(clean)}", label="삭제", timeout=300)
+        return {"deleted": clean}
+
+    def upload_into(self, local_path: str, remote_dir: str) -> dict[str, Any]:
+        """내 PC 파일 하나를 지금 보고 있는 폴더에 올린다.
+
+        데이터셋 업로드와 달리 압축 파일만 받지 않는다. 그 제한은 NAS IOPS 를
+        지키려고 **데이터셋**에 건 것이지, 스크립트 한 장에 걸 이유가 없다.
+        """
+        source = pathlib.Path(local_path).expanduser()
+        if not source.is_file():
+            raise ApiError("LOCAL_FILE_NOT_FOUND", "선택한 파일을 찾을 수 없습니다.", 400)
+        target = self._guard_user_path(
+            posixpath.join(posixpath.normpath(remote_dir), source.name))
+        self.make_dir_user(posixpath.dirname(target))
+        with self._sftp_lock:
+            self.sftp.put(str(source), target)
+            self.sftp.chmod(target, 0o644)
+        return {"path": target, "name": source.name, "size": source.stat().st_size}
+
+    def make_dir_user(self, path: str) -> None:
+        clean = self._guard_user_path(path)
+        with self._sftp_lock:
+            current = "/" if clean.startswith("/") else ""
+            for part in clean.split("/"):
+                if not part:
+                    continue
+                current = posixpath.join(current, part)
+                try:
+                    self.sftp.stat(current)
+                except OSError:
+                    self.sftp.mkdir(current, mode=0o755)
 
     def open_download(self, path: str) -> tuple[Any, dict[str, Any]]:
         """내 PC 로 내려받을 바이트 흐름을 연다. 파일은 그대로, 폴더는 tar.gz 로.

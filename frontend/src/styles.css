@@ -385,3 +385,20 @@ button.hrow:hover{background:#f8fafc}
 .crash button{margin-top:14px;border:0;border-radius:8px;height:38px;padding:0 18px;background:#21b98e;color:#fff;font-size:11px;font-weight:700}
 .exp-preview-actions{display:flex;gap:6px;flex:none}
 .exp-preview-actions .compact{height:30px;font-size:9px;padding:0 10px}
+
+/* 탐색기 쓰기 도구줄. NAS 에는 휴지통이 없어서 삭제만 색으로 구분한다. */
+.exp-actions{display:flex;align-items:center;gap:7px;padding:11px 0;border-bottom:1px solid var(--line)}
+.exp-actions .compact{height:30px;font-size:9px;padding:0 11px}
+.exp-sep{width:1px;height:18px;background:var(--line);margin:0 3px}
+.exp-actions .danger{color:#c94c58}
+.exp-actions .danger:not(:disabled):hover{border-color:#f0c9cd;background:#fff7f7}
+.exp-selected{margin-left:auto;font-size:9px;color:#a0a9b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px}
+.exp-rename{border:1px solid #67c9af;border-radius:5px;padding:2px 6px;font:inherit;font-size:10px;color:#253047;min-width:150px;outline:none}
+.confirm-card{width:440px;background:#fff;border-radius:15px;padding:26px;box-shadow:0 30px 80px #0005}
+.confirm-card h2{font-size:18px;margin:5px 0 16px;word-break:break-all}
+.confirm-card .detail-grid{margin-bottom:14px}
+.confirm-warn{display:flex;align-items:center;gap:7px;font-size:10px;color:#c94c58;background:#fff0f1;border-radius:7px;padding:10px 11px;margin:0}
+.confirm-type{margin:14px 0 0}
+.confirm-type b{color:#253047}
+.confirm-card .button-row{border:0;padding-top:16px}
+.confirm-delete{width:auto;padding:0 18px;height:40px}

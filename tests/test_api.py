@@ -951,3 +951,96 @@ def test_download_does_not_hold_the_shared_sftp_channel(tmp_path):
             assert meta["size"] > 0
         finally:
             stream.close()
+
+
+# --- 탐색기 쓰기 ---------------------------------------------------------------
+# 이 도구의 첫 파괴적 기능이다. NAS 에는 휴지통이 없어서 한 번 지우면 끝이라,
+# 경계와 확인 절차가 기능 자체보다 중요하다.
+
+def test_make_rename_upload_and_delete_round_trip(tmp_path):
+    source = tmp_path / "note.txt"
+    source.write_bytes(b"hello\n")        # 줄바꿈 변환 없이 크기를 고정한다
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        assert client.post("/api/v1/remote/mkdir",
+                           json={"path": root, "name": "work"}).status_code == 200
+        renamed = client.post("/api/v1/remote/rename",
+                              json={"path": f"{root}/work", "new_name": "work2"})
+        assert renamed.status_code == 200 and renamed.json()["path"] == f"{root}/work2"
+
+        up = client.post(
+            f"/api/v1/remote/upload?path={root}/work2&local_path={source}").json()
+        assert up["selected"] is True and up["file"]["size"] == 6
+
+        listed = client.get(f"/api/v1/remote/ls?path={root}/work2").json()["entries"]
+        assert [e["name"] for e in listed] == ["note.txt"]
+
+        assert client.post("/api/v1/remote/delete",
+                           json={"path": f"{root}/work2"}).status_code == 200
+        after = client.get(f"/api/v1/remote/ls?path={root}").json()["entries"]
+        assert "work2" not in [e["name"] for e in after]
+
+
+def test_describe_counts_what_delete_would_destroy(tmp_path):
+    """'정말 지울까요?' 는 아무 정보도 주지 않는다. 개수와 용량을 세어 보여준다."""
+    source = tmp_path / "a.txt"
+    source.write_text("0123456789", encoding="utf-8")
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        client.post("/api/v1/remote/mkdir", json={"path": root, "name": "tree"})
+        client.post("/api/v1/remote/mkdir", json={"path": f"{root}/tree", "name": "inner"})
+        client.post(f"/api/v1/remote/upload?path={root}/tree/inner&local_path={source}")
+
+        info = client.get(f"/api/v1/remote/describe?path={root}/tree").json()
+        assert info["is_dir"] is True and info["name"] == "tree"
+        assert info["folders"] == 1 and info["files"] == 1 and info["bytes"] == 10
+
+
+def test_writes_stay_inside_my_own_nas_folder():
+    app = create_app()
+    with TestClient(app) as client:
+        # 공용 데이터셋은 읽기만 한다. 남의 자리에 쓰는 건 이 도구가 할 일이 아니다.
+        blocked = client.post("/api/v1/remote/mkdir",
+                              json={"path": "/data/datasets", "name": "mine"})
+        assert blocked.status_code == 403
+        assert client.post("/api/v1/remote/delete",
+                           json={"path": "/etc/passwd"}).status_code == 403
+
+
+def test_tool_managed_folders_cannot_be_deleted():
+    """.seraph-gui 는 사용자가 만든 적이 없다. 지웠을 때 뭘 잃는지도 알 수 없다."""
+    app = create_app()
+    with TestClient(app) as client:
+        for path in ("/data/mockuser", "/data/mockuser/.seraph-gui"):
+            refused = client.post("/api/v1/remote/delete", json={"path": path})
+            assert refused.status_code == 403
+            assert refused.json()["error"]["code"] == "REMOTE_PATH_PROTECTED"
+
+
+def test_entry_names_cannot_escape_the_folder_being_shown():
+    """'/' 하나만 통과해도 사용자가 보고 있는 폴더 밖에 파일을 만들 수 있다."""
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        for name in ("a/b", "..", ".", "", "  ", "x\\y", "bad\nname"):
+            assert client.post("/api/v1/remote/mkdir",
+                               json={"path": root, "name": name}).status_code == 422
+        # 경로 자체도 절대경로만 받는다.
+        assert client.post("/api/v1/remote/delete",
+                           json={"path": "relative/path"}).status_code == 422
+
+
+def test_rename_does_not_silently_overwrite_an_existing_name():
+    app = create_app()
+    with TestClient(app) as client:
+        root = "/data/mockuser"
+        client.post("/api/v1/remote/mkdir", json={"path": root, "name": "one"})
+        client.post("/api/v1/remote/mkdir", json={"path": root, "name": "two"})
+        clash = client.post("/api/v1/remote/rename",
+                            json={"path": f"{root}/one", "new_name": "two"})
+        assert clash.status_code == 409
+        # 둘 다 그대로 남아 있어야 한다.
+        names = [e["name"] for e in client.get(f"/api/v1/remote/ls?path={root}").json()["entries"]]
+        assert {"one", "two"} <= set(names)
