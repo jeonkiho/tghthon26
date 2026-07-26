@@ -410,3 +410,16 @@ button.hrow:hover{background:#f8fafc}
 .notice-mock strong{display:block;font-size:11px;color:#8a5d12}
 .notice-mock p{font-size:10px;line-height:1.6;color:#9a7534;margin:5px 0 0}
 .notice-mock code{background:#fdefd2;border-radius:4px;padding:1px 5px;font-size:9px}
+
+/* 코드에서 찾은 환경 파일. 내용을 보여주고 고르게 한다 — 무엇으로 만드는지
+   모른 채 15분을 기다리게 하지 않는다. */
+.env-spec{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:12px 13px;margin-bottom:9px;cursor:pointer;transition:.15s}
+.env-spec:hover{border-color:#b6c1d1}
+.env-spec.on{border-color:#67c9af;background:#f4fbf9;box-shadow:0 0 0 3px #3cc39f12}
+.env-spec input{margin-top:3px;accent-color:#22b98e}
+.env-spec>div{flex:1;min-width:0}
+.env-spec strong{display:block;font-size:11px;color:#253047}
+.env-spec small{display:block;font-size:8.5px;color:#8792a4;margin-top:3px;line-height:1.5}
+.env-spec pre{margin:9px 0 0;max-height:104px;overflow:auto;background:#101827;color:#b9c7da;border-radius:7px;padding:9px 10px;font:8.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
+.env-spec-none{display:flex;align-items:flex-start;gap:7px;font-size:10px;line-height:1.6;color:#a4761d;background:#fff7e9;border-radius:7px;padding:10px 11px;margin:0 0 14px}
+.env-spec-none svg{flex:none;margin-top:2px}

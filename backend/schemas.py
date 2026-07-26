@@ -261,6 +261,10 @@ class EnvSpec(StrictModel):
     mode: str = "scratch"
     python: str = "3.11"
     source: str | None = Field(default=None, max_length=128)
+    # 내 PC 의 environment.yml / requirements.txt 경로. 서버는 이 경로를 볼 수
+    # 없으므로 백엔드가 읽어서 내용을 올린다.
+    spec_path: str | None = Field(default=None, max_length=4096)
+    spec_kind: str | None = None
     conda_packages: list[str] = Field(default_factory=list, max_length=40)
     pip_packages: list[str] = Field(default_factory=list, max_length=40)
     channels: list[str] = Field(default_factory=lambda: ["conda-forge"], max_length=10)
@@ -277,8 +281,15 @@ class EnvSpec(StrictModel):
     @field_validator("mode")
     @classmethod
     def valid_mode(cls, value: str) -> str:
-        if value not in ("scratch", "clone", "venv"):
-            raise ValueError("만드는 방식은 scratch, clone, venv 중 하나여야 합니다.")
+        if value not in ("scratch", "clone", "venv", "spec"):
+            raise ValueError("만드는 방식은 scratch, clone, venv, spec 중 하나여야 합니다.")
+        return value
+
+    @field_validator("spec_kind")
+    @classmethod
+    def valid_spec_kind(cls, value: str | None) -> str | None:
+        if value is not None and value not in ("conda", "pip"):
+            raise ValueError("환경 파일 종류는 conda 또는 pip 여야 합니다.")
         return value
 
     @field_validator("python")

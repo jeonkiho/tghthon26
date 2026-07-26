@@ -15,6 +15,7 @@ nohup 으로 떼어 놓고 로그 파일을 tail 해서 진행 상황을 보여�
 from __future__ import annotations
 
 import json
+import pathlib
 import shlex
 import uuid
 from typing import Any
@@ -104,6 +105,89 @@ say "위치: $PREFIX"
 say "완료 $(date '+%F %T')"
 printf '0' > rc
 """
+
+
+# 코드 폴더에서 찾아볼 환경 스펙 파일. 위에 있는 것을 먼저 쓴다 —
+# environment.yml 은 채널과 conda 패키지까지 담아서 더 완전하다.
+SPEC_FILES = (
+    ("conda", "environment.yml"),
+    ("conda", "environment.yaml"),
+    ("conda", "conda.yml"),
+    ("pip", "requirements.txt"),
+)
+
+# 감지는 하지만 아직 이 파일로 환경을 만들지는 못한다. 도구(poetry·uv·pdm)마다
+# 설치 방법이 달라서, 하나로 뭉뚱그리면 틀린 명령을 돌리게 된다.
+SPEC_FILES_UNSUPPORTED = ("pyproject.toml", "Pipfile", "poetry.lock", "uv.lock")
+
+# 스펙 파일 미리보기 상한. 화면에서 확인용으로 보여줄 만큼만 읽는다.
+SPEC_PREVIEW_BYTES = 8 * 1024
+
+
+def detect_spec_files(local_dir: str) -> dict[str, Any]:
+    """코드 폴더에 환경 스펙 파일이 있는지 본다.
+
+    깃에 커밋된 environment.yml / requirements.txt 로 환경을 만드는 건 파이썬
+    쪽에서 가장 표준적인 방식이다. 그런데 이 화면은 지금까지 패키지를 손으로
+    타이핑하게 했다 — 이미 저장소에 정답이 적혀 있는데도.
+    """
+    root = pathlib.Path(local_dir).expanduser()
+    if not root.is_dir():
+        raise ApiError("LOCAL_DIR_NOT_FOUND", "선택한 폴더를 찾을 수 없습니다.", 400)
+
+    found = []
+    for kind, name in SPEC_FILES:
+        path = root / name
+        if not path.is_file():
+            continue
+        raw = path.read_bytes()[:SPEC_PREVIEW_BYTES + 1]
+        found.append({
+            "kind": kind,
+            "name": name,
+            "path": str(path),
+            "size": path.stat().st_size,
+            "truncated": len(raw) > SPEC_PREVIEW_BYTES,
+            "text": raw[:SPEC_PREVIEW_BYTES].decode("utf-8", errors="replace"),
+        })
+
+    unsupported = [name for name in SPEC_FILES_UNSUPPORTED if (root / name).is_file()]
+    return {"directory": str(root), "specs": found, "unsupported": unsupported}
+
+
+# conda 가 내는 오류 중, 원문만 봐서는 무엇을 해야 하는지 알기 어려운 것들.
+# 로그는 그대로 두고 맨 위에 한 줄로 무엇을 해야 하는지 얹는다.
+_FAILURE_HINTS = (
+    (
+        "CondaToSNonInteractiveError",
+        "Anaconda 기본 채널(repo.anaconda.com)의 약관에 동의하지 않아 막혔습니다. "
+        "이 화면은 적어 놓은 채널만 쓰도록 바뀌었으니, 백엔드를 최신으로 올린 뒤 "
+        "다시 시도해 보세요. 그래도 나면 환경 파일이나 개인 .condarc 가 defaults "
+        "채널을 요구하는 경우입니다.",
+    ),
+    (
+        "PackagesNotFoundError",
+        "요청한 패키지를 채널에서 찾지 못했습니다. 이름·버전을 확인하거나 "
+        "필요한 채널(pytorch·nvidia 등)을 채널 칸에 넣어 주세요.",
+    ),
+    (
+        "No space left on device",
+        "디스크가 가득 찼습니다. '파일' 화면에서 쓰지 않는 환경이나 데이터를 정리한 뒤 "
+        "다시 시도하세요.",
+    ),
+    (
+        "CondaHTTPError",
+        "패키지 저장소에 연결하지 못했습니다. 환경 화면 맨 위의 점검 결과에서 "
+        "네트워크 상태를 확인하세요.",
+    ),
+)
+
+
+def _explain_failure(log: str) -> str | None:
+    """로그에서 알려진 실패를 찾아 '무엇을 해야 하는지' 한 줄로 바꾼다."""
+    for needle, hint in _FAILURE_HINTS:
+        if needle in log:
+            return hint
+    return None
 
 
 class EnvService:
@@ -228,6 +312,10 @@ class EnvService:
         if spec.mode in ("clone", "venv"):
             source_prefix = self._resolve_source(spec.source, remote, installs)
 
+        spec_text = None
+        if spec.mode == "spec":
+            spec_text = self._read_spec(spec)
+
         build_id = uuid.uuid4().hex[:12]
         script = _BUILD_SCRIPT.format(
             conda_bin=shlex.quote(f"{base['root']}/bin/conda"),
@@ -245,10 +333,31 @@ class EnvService:
             "pip_packages": spec.pip_packages,
             "channels": spec.channels,
             "source": source_prefix,
+            "spec_kind": spec.spec_kind,
+            "spec_name": pathlib.PurePath(spec.spec_path).name if spec.spec_path else None,
             "conda_root": base["root"],
         }
+        if spec_text is not None:
+            # 스펙 파일을 서버로 함께 올린다. 로컬 경로를 서버가 읽을 수는 없다.
+            remote.write_text(f"{remote.build_dir(build_id)}/spec", spec_text)
         remote.start_env_build(build_id, script, record)
         return {"build": {**record, "state": "running", "log": ""}}
+
+    @staticmethod
+    def _read_spec(spec: EnvSpec) -> str:
+        """내 PC 의 스펙 파일을 읽는다. 서버는 이 경로를 볼 수 없으므로 내용을 올린다."""
+        if not spec.spec_path:
+            raise ApiError("ENV_SPEC_REQUIRED", "사용할 환경 파일을 골라주세요.", 422)
+        path = pathlib.Path(spec.spec_path).expanduser()
+        if not path.is_file():
+            raise ApiError("ENV_SPEC_NOT_FOUND", f"'{path.name}' 파일을 찾을 수 없습니다.", 400)
+        if path.stat().st_size > 1024 * 1024:
+            raise ApiError(
+                "ENV_SPEC_TOO_LARGE",
+                "환경 파일이 1MB 를 넘습니다. 올바른 파일인지 확인해 주세요.",
+                status_code=422,
+            )
+        return path.read_text(encoding="utf-8", errors="replace")
 
     @staticmethod
     def _resolve_source(source: str | None, remote: Any, installs: list[dict[str, Any]]) -> str:
@@ -295,19 +404,51 @@ class EnvService:
                     f"--channel {_tos_channel} >/dev/null 2>&1 || true")
 
         if spec.mode == "scratch":
-            args = ['"$CONDA_BIN"', "create", "-y", "-p", quoted_prefix, f"python={spec.python}"]
+            # --override-channels 를 붙인다. 이게 없으면 conda 는 화면에 적힌 채널
+            # **말고도** condarc 의 defaults(repo.anaconda.com)를 같이 뒤진다.
+            #
+            # 두 가지가 어긋난다. 하나는 화면이 "채널: pytorch nvidia conda-forge"
+            # 라고 말해 놓고 실제로는 다른 곳에서도 받는다는 것. 다른 하나는 요즘
+            # conda 가 그 채널에 대해 약관 동의를 요구해서, 최신 conda 를 쓰는
+            # 사람만 CondaToSNonInteractiveError 로 죽는다는 것 —
+            # 같은 화면에서 같은 값을 넣었는데 누구는 되고 누구는 안 된다.
+            #
+            # 약관 동의를 우리가 대신 눌러 주지는 않는다(라이선스 판단이다).
+            # 화면에 적힌 채널만 쓰면 애초에 그 채널에 갈 일이 없다.
+            channels = spec.channels or ["conda-forge"]
+            args = ['"$CONDA_BIN"', "create", "-y", "--override-channels",
+                    "-p", quoted_prefix, f"python={spec.python}"]
             args += [shlex.quote(pkg) for pkg in spec.conda_packages]
-            for channel in spec.channels:
+            for channel in channels:
                 args += ["-c", shlex.quote(channel)]
             # solve 는 CPU 를 많이 쓴다. 로그인 노드는 모두가 같이 쓰는 곳이라
             # 우선순위를 낮춰 다른 사람의 셸이 느려지지 않게 한다.
             lines.append("say '환경을 처음부터 만듭니다. 15분 이상 걸릴 수 있습니다.'")
+            lines.append(f"say '채널: {' '.join(channels)} (이 목록만 사용합니다)'")
             lines.append("run nice -n 19 " + " ".join(args))
         elif spec.mode == "clone":
             lines.append("say '기존 환경을 복제합니다.'")
             lines.append(
                 f'run nice -n 19 "$CONDA_BIN" create -y -p {quoted_prefix} '
                 f"--clone {shlex.quote(source_prefix or '')}")
+        elif spec.mode == "spec":
+            # 스펙 파일은 빌드 폴더에 spec 이라는 이름으로 같이 올라간다. 원본 이름을
+            # 그대로 쓰지 않는 이유는, 이름이 무엇이든 스크립트가 한 곳만 보게 하려는 것.
+            if spec.spec_kind == "conda":
+                lines.append("say '환경 파일(environment.yml)로 만듭니다.'")
+                # conda env create 에는 --override-channels 가 없다. 채널은 파일이
+                # 정한다 — 사용자가 커밋해 둔 파일을 우리가 고쳐 쓰지는 않는다.
+                lines.append(
+                    f'run nice -n 19 "$CONDA_BIN" env create -f "$(dirname "$0")/spec" '
+                    f"-p {quoted_prefix}")
+            else:
+                lines.append("say 'requirements.txt 로 만듭니다.'")
+                lines.append(
+                    f'run nice -n 19 "$CONDA_BIN" create -y --override-channels '
+                    f"-p {quoted_prefix} python={spec.python} -c conda-forge")
+                lines.append(
+                    f'run {shlex.quote(f"{prefix}/bin/python")} -m pip install --no-input '
+                    f'--disable-pip-version-check -r "$(dirname "$0")/spec"')
         else:  # venv
             lines.append("say '기존 파이썬 위에 venv 를 만듭니다.'")
             lines.append(
@@ -335,7 +476,9 @@ class EnvService:
         if rc == 0:
             status, message = "succeeded", f"'{record['name']}' 환경이 준비됐습니다."
         elif rc is not None:
-            status, message = "failed", f"환경 만들기가 실패했습니다 (rc={rc}). 아래 로그를 보세요."
+            status = "failed"
+            message = (_explain_failure(state.get("log", ""))
+                       or f"환경 만들기가 실패했습니다 (rc={rc}). 아래 로그를 보세요.")
         elif alive:
             status, message = "running", "만드는 중입니다. 창을 닫아도 서버에서 계속됩니다."
         else:

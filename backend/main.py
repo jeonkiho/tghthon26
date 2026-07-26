@@ -19,6 +19,7 @@ from seraph import clusters, history, placement, sbatch, services, slack, tutori
 
 from .cache import SnapshotCache
 from .dependencies import ConnectionManager
+from . import env_service as env_service_module
 from .env_service import EnvService
 from .errors import ApiError, install_error_handlers
 from .job_service import JobService
@@ -253,6 +254,20 @@ def create_app(config: Any | None = None, *, auto_connect: bool = True) -> FastA
     @app.get("/api/v1/envs/builds/{build_id}")
     async def env_build(build_id: BUILD_ID) -> dict[str, Any]:
         return {"ok": True, **await to_thread.run_sync(lambda: envs.build_status(build_id))}
+
+    @app.post("/api/v1/envs/detect")
+    async def detect_env_spec(local_path: str | None = None) -> dict[str, Any]:
+        """코드 폴더에서 environment.yml / requirements.txt 를 찾는다.
+
+        깃에 커밋된 스펙 파일로 환경을 만드는 건 파이썬 쪽에서 가장 표준적인
+        방식인데, 이 화면은 지금까지 패키지를 손으로 타이핑하게 했다 — 이미
+        저장소에 정답이 적혀 있는데도.
+        """
+        chosen = local_path or await to_thread.run_sync(lambda: select_code_path("directory"))
+        if not chosen:
+            return {"ok": True, "selected": False, "specs": [], "unsupported": []}
+        found = await to_thread.run_sync(lambda: env_service_module.detect_spec_files(chosen))
+        return {"ok": True, "selected": True, **found}
 
     @app.get("/api/v1/envs")
     async def list_envs() -> dict[str, Any]:
