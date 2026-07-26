@@ -876,7 +876,7 @@ export default function App() {
       setForm((old) => ({
         ...old,
         partition: old.partition || meData.default_partition || "",
-        output_path: old.output_path === blankForm.output_path ? `/nas2/data/${meData.user}/results/${old.name}` : old.output_path,
+        output_path: old.output_path === blankForm.output_path && meData.data_root ? `${meData.data_root}/results/${old.name}` : old.output_path,
       }));
     } catch (err) { report(err); }
   }, [report]);
@@ -1171,7 +1171,7 @@ export default function App() {
           <article className="panel form-panel"><SectionTitle number="02" title="데이터와 결과" subtitle="대용량 데이터는 업로드하지 않고 기존 NAS 경로를 사용합니다."/>
             <Field label="NAS 데이터 경로" hint="압축 파일 하나 · 찾아보기로 고르거나 내 PC에서 올릴 수 있습니다">
               <div className="path-input">
-                <input placeholder="예: /nas2/data/<사용자명>/datasets/images.tar.gz" value={form.dataset_path} onChange={(e) => setForm({...form, dataset_path: e.target.value})}/>
+                <input placeholder="찾아보기로 NAS 경로를 고르세요 (예: .../datasets/images.tar.gz)" value={form.dataset_path} onChange={(e) => setForm({...form, dataset_path: e.target.value})}/>
                 <button onClick={() => setNasOpen(true)}><Icon name="folder" size={17}/> 찾아보기</button>
                 <button onClick={uploadDataset} disabled={uploading}>{uploading ? "올리는 중…" : "올리기"}</button>
               </div>

@@ -249,10 +249,10 @@ class JobService:
         elif not dataset.readable:
             problems.append({"level": "block", "code": "DATASET_NOT_READABLE", "message": "NAS 데이터 경로를 읽을 권한이 없습니다."})
 
-        if posixpath.normpath(spec.dataset_path) in {"/", self.remote.data_root, self.remote.connection.config.data_root}:
+        if posixpath.normpath(spec.dataset_path) in {"/", self.remote.data_root, self.remote.data_root_base}:
             problems.append({"level": "block", "code": "DATASET_PATH_TOO_BROAD", "message": "데이터의 실제 파일 또는 폴더 경로까지 지정하세요."})
 
-        if not _is_under(spec.dataset_path, self.remote.connection.config.data_root):
+        if not _is_under(spec.dataset_path, self.remote.data_root_base):
             problems.append({
                 "level": "block",
                 "code": "DATASET_NOT_ON_NAS",
@@ -284,7 +284,7 @@ class JobService:
                 "code": "OUTPUT_OUTSIDE_USER_DATA",
                 "message": f"결과 경로는 {self.remote.data_root}/... 아래여야 합니다.",
             })
-        if posixpath.normpath(spec.output_path) in {"/", self.remote.connection.config.data_root, self.remote.data_root, "/home", self.remote.home}:
+        if posixpath.normpath(spec.output_path) in {"/", self.remote.data_root_base, self.remote.data_root, "/home", self.remote.home}:
             problems.append({"level": "block", "code": "OUTPUT_PATH_TOO_BROAD", "message": "결과를 저장할 하위 폴더까지 지정하세요."})
 
         partition = spec.partition or snapshot.default_partition
@@ -606,7 +606,7 @@ class JobService:
                 "TAR, TAR.GZ, TGZ 또는 ZIP 데이터 파일을 지정하세요.",
                 status_code=422,
             )
-        if not _is_under(meta["dataset_path"], self.remote.connection.config.data_root):
+        if not _is_under(meta["dataset_path"], self.remote.data_root_base):
             raise ApiError(
                 "DATASET_NOT_ON_NAS",
                 "튜토리얼 기준 NAS 데이터 경로인 /data/...를 입력하세요.",

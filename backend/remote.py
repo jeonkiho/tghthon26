@@ -143,7 +143,9 @@ class MockRemote:
         self._root = pathlib.Path(self._tmp.name)
         self._home = "/home/mockuser"
         self.username = "mockuser"
-        self.data_root = f"{connection.config.data_root}/{self.username}"
+        self.data_root_base = connection.config.data_root_for(
+            getattr(connection, "host", None))
+        self.data_root = f"{self.data_root_base}/{self.username}"
         self._jobs: dict[str, dict[str, Any]] = {}
         self._builds: dict[str, dict[str, Any]] = {}
         self._next_job_id = 990001
@@ -510,7 +512,10 @@ class SSHRemote:
         self._sftp_lock = threading.RLock()
         self._home = posixpath.normpath(self.sftp.normalize("."))
         self.username = connection.username
-        self.data_root = f"{connection.config.data_root}/{self.username}"
+        # 클러스터마다 NAS 경로가 다르다(ariel /nas2/data, moana /data). 접속 호스트로 정한다.
+        self.data_root_base = connection.config.data_root_for(
+            getattr(connection, "host", None))
+        self.data_root = f"{self.data_root_base}/{self.username}"
 
     @property
     def home(self) -> str:
@@ -670,7 +675,7 @@ class SSHRemote:
         candidates = [
             f"{self.data_root}/anaconda3",
             f"{self.data_root}/miniconda3",
-            f"{self.connection.config.data_root}/opt/anaconda3",
+            f"{self.data_root_base}/opt/anaconda3",
             f"{self._home}/anaconda3",
             f"{self._home}/miniconda3",
         ]
